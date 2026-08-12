@@ -368,9 +368,9 @@
       </div>
       <main id="lyricsList" class="lyrics" aria-label="Lyric blocks"></main>
       <footer class="transport">
-        <button id="back5" aria-label="Back 5 seconds">⏪⏪</button
+        <button id="back2" aria-label="Back 2 seconds">⏪ 2s</button
         ><button id="playBtn" class="play" aria-label="Play or pause">▶</button
-        ><button id="forward5" aria-label="Forward 5 seconds">⏩⏩</button
+        ><button id="forward2" aria-label="Forward 2 seconds">2s ⏩</button
         ><label class="speed"
           ><span id="speedLabel">1.00×</span
           ><input
@@ -641,10 +641,10 @@
           else if (act === "select") select(id, true, false);
         });
         $("#playBtn").onclick = () => ws?.playPause();
-        $("#back5").onclick = () =>
-          ws && ws.setTime(Math.max(0, ws.getCurrentTime() - 5));
-        $("#forward5").onclick = () =>
-          ws && ws.setTime(Math.min(ws.getDuration(), ws.getCurrentTime() + 5));
+        $("#back2").onclick = () =>
+          ws && ws.setTime(Math.max(0, ws.getCurrentTime() - 2));
+        $("#forward2").onclick = () =>
+          ws && ws.setTime(Math.min(ws.getDuration(), ws.getCurrentTime() + 2));
         $("#speedSlider").oninput = (e) => {
           speed = +e.target.value;
           $("#speedLabel").textContent = speed.toFixed(2) + "×";
