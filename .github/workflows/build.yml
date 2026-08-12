@@ -52,7 +52,18 @@ jobs:
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug
+          for i in $(seq 1 3); do
+            echo "Gradle build attempt $i"
+            if ./gradlew assembleDebug; then
+              echo "Build succeeded!"
+              exit 0
+            else
+              echo "Build failed, retrying in 5 seconds..."
+              sleep 5
+            fi
+          done
+          echo "All build attempts failed."
+          exit 1
 
       - name: Rename APK for clarity
         run: cp android/app/build/outputs/apk/debug/app-debug.apk lyric-sync-debug.apk
