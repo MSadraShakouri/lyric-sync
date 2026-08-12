@@ -1,46 +1,762 @@
 <!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Lyric Sync</title>
-<script src="https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/wavesurfer.min.js"></script>
-<style>
-:root{color-scheme:dark;--bg:#1a1a1a;--panel:#242424;--panel2:#2e2e2e;--ink:#eee;--muted:#aaa;--accent:#62d6ff;--danger:#ff7878}*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font:15px/1.35 system-ui,-apple-system,Segoe UI,sans-serif;overflow:hidden}button,input,textarea{font:inherit}button{touch-action:manipulation;border:0;color:var(--ink);background:#3b3b3b;border-radius:8px;cursor:pointer;transition:filter .08s,transform .08s}button:active{filter:brightness(1.45);transform:scale(.96)}.screen{height:100dvh}.hidden{display:none!important}
-/* Start */#startScreen{overflow:auto;padding:clamp(20px,7vw,48px);display:flex;flex-direction:column;gap:16px;max-width:700px;margin:auto}h1{margin:0 0 8px;font-size:clamp(26px,7vw,38px)}.hint{color:var(--muted);margin:0}.field{display:grid;gap:8px}.upload{background:var(--panel);border:1px solid #444;border-radius:12px;padding:14px}.upload input{width:100%;color:var(--muted)}textarea{width:100%;min-height:44vh;resize:vertical;background:#111;color:var(--ink);border:1px solid #4b4b4b;border-radius:10px;padding:12px}.primary{background:var(--accent);color:#09212b;font-weight:800;padding:14px;font-size:17px}.notice{color:#ffd477;min-height:1.3em}
-/* Sync */#syncScreen{display:grid;grid-template-rows:30dvh 60dvh 10dvh;min-height:100dvh}.wave-area{position:relative;min-height:0;border-bottom:1px solid #444;background:#151515;overflow:hidden}.wave-toolbar{position:absolute;z-index:3;left:8px;top:8px;right:8px;display:flex;justify-content:space-between;pointer-events:none;font-size:12px;color:#b9dce7;text-shadow:0 1px 2px #000}.wave-toolbar>*{background:#0008;padding:3px 6px;border-radius:5px}#waveform{height:100%;touch-action:pan-y}.lyrics{overflow-y:auto;overscroll-behavior:contain;background:#1e1e1e;scroll-behavior:smooth}.block{min-height:98px;display:flex;gap:7px;padding:7px 8px;border-bottom:1px solid #383838;will-change:transform;transform:translateZ(0);transition:background .12s,box-shadow .12s}.block.active{background:#17313a;box-shadow:inset 4px 0 var(--accent)}.left{width:83px;flex:none;display:grid;grid-template-rows:1fr 1.25fr 1fr;gap:4px}.stamp-time{font-size:12px;padding:2px 3px;background:#2a2a2a;white-space:nowrap}.nudge{font-size:11px}.line{min-width:0;flex:1;padding:9px 3px;white-space:pre-wrap;overflow-wrap:anywhere;align-self:center;cursor:pointer}.line.empty:before{content:'Blank line';color:#747474;font-style:italic}.right{width:80px;flex:none;display:grid;grid-template-rows:22px 1fr 22px;gap:4px}.icon{padding:0;font-size:16px;background:#303030}.stamp{min-height:48px;background:#ffb648;color:#251600;font-weight:900;font-size:13px;letter-spacing:.5px}.transport{position:relative;z-index:5;border-top:1px solid #4a4a4a;background:#252525;display:flex;align-items:center;gap:7px;padding:6px max(8px,env(safe-area-inset-right)) max(6px,env(safe-area-inset-bottom)) max(8px,env(safe-area-inset-left));min-width:0}.transport button{height:38px;padding:0 10px;font-size:16px}.play{background:var(--accent)!important;color:#09212b!important;font-weight:900;font-size:18px!important;min-width:52px}.speed{display:grid;gap:1px;min-width:70px;flex:1;color:var(--muted);font-size:11px;text-align:center}.speed input{width:100%;accent-color:var(--accent)}.export{font-size:12px!important;padding:0 8px!important}
-/* dialogs */.sheet-backdrop,.modal-backdrop{position:fixed;z-index:20;inset:0;background:#0009;display:flex;align-items:flex-end}.sheet{width:100%;background:#303030;border-radius:16px 16px 0 0;padding:10px 14px calc(14px + env(safe-area-inset-bottom));display:grid;gap:7px}.sheet .handle{height:4px;width:40px;background:#777;border-radius:9px;margin:2px auto 7px}.sheet button{padding:13px;text-align:left;background:#3d3d3d}.sheet .delete{color:#ff9b9b}.modal-backdrop{align-items:center;justify-content:center;padding:20px}.modal{background:#303030;width:min(420px,100%);padding:18px;border-radius:14px;display:grid;gap:12px}.modal input{background:#161616;color:#eee;border:1px solid #666;border-radius:7px;padding:11px;width:100%}.modal-actions{display:flex;justify-content:flex-end;gap:8px}.modal-actions button{padding:9px 13px}.flash{animation:flash .3s ease}@keyframes flash{50%{background:#4c7b88}}
-</style></head><body>
-<section id="startScreen" class="screen"><h1>Lyric Sync</h1><p class="hint">Everything stays on this device. Add audio and lyrics, then stamp each line as it plays.</p><label class="field upload">Audio file <input id="audioInput" type="file" accept="audio/*"></label><label class="field upload">Lyrics .txt (UTF-8, optional) <input id="textInput" type="file" accept=".txt,text/plain"></label><label class="field">Lyrics — one block per line <textarea id="lyricsInput" placeholder="Paste lyrics here…&#10;&#10;Empty lines are kept as blank blocks."></textarea></label><div id="startNotice" class="notice"></div><button id="beginBtn" class="primary">Start syncing</button></section>
-<section id="syncScreen" class="screen hidden"><div class="wave-area"><div class="wave-toolbar"><span id="nowLabel">00:00.00</span><span>Pinch to zoom</span></div><div id="waveform"></div></div><main id="lyricsList" class="lyrics" aria-label="Lyric blocks"></main><footer class="transport"><button id="back5" aria-label="Back 5 seconds">⏪⏪</button><button id="playBtn" class="play" aria-label="Play or pause">▶</button><button id="forward5" aria-label="Forward 5 seconds">⏩⏩</button><label class="speed"><span id="speedLabel">1.00×</span><input id="speedSlider" type="range" min="0.25" max="1.5" step="0.05" value="1"></label><button id="exportBtn" class="export">Export .lrc</button></footer></section>
-<div id="overlay"></div>
-<script>
-(()=>{'use strict';
-const $=s=>document.querySelector(s), storeKey='lyric-sync-session-v1';
-let ws=null, blocks=[], activeId=null, speed=1, zoom=80, audioName='', audioData=null, raf=0, lastAutoId=null, pinch=null;
-const ids=()=>crypto.randomUUID?crypto.randomUUID():'b'+Date.now()+Math.random().toString(36).slice(2);
-const fmt=ms=>{if(ms==null)return '[--:--]';ms=Math.max(0,Math.round(ms));let c=Math.floor(ms/10)%100,s=Math.floor(ms/1000)%60,m=Math.floor(ms/60000);return `[${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}.${String(c).padStart(2,'0')}]`};
-const getTime=()=>ws?Math.round(ws.getCurrentTime()*1000):0;
-function save(){try{localStorage.setItem(storeKey,JSON.stringify({audioName,audioData,blocks,speed,zoom}));}catch(e){console.warn(e);$('#startNotice').textContent='Session saved without audio: browser storage is full.'}}
-function setScreen(sync){$('#startScreen').classList.toggle('hidden',sync);$('#syncScreen').classList.toggle('hidden',!sync)}
-function makeBlocks(text){return text.split('\n').map(text=>({id:ids(),text,timestamp:null}))}
-function render(){const list=$('#lyricsList');list.innerHTML='';blocks.forEach((b,i)=>{const el=document.createElement('article');el.className='block'+(b.id===activeId?' active':'');el.dataset.id=b.id;el.innerHTML=`<div class="left"><button class="nudge" data-act="plus">+10</button><button class="stamp-time" data-act="time">${fmt(b.timestamp)}</button><button class="nudge" data-act="minus">−10</button></div><div class="line ${b.text===''?'empty':''}" data-act="select">${escapeHTML(b.text)}</div><div class="right"><button class="icon" data-act="from" aria-label="Play from here">▶</button><button class="stamp" data-act="stamp">STAMP</button><button class="icon" data-act="more" aria-label="More options">⋯</button></div>`;list.append(el)})}
-function escapeHTML(s){return s.replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))}
-function select(id,seek=false,center=false){activeId=id;render();const b=blocks.find(x=>x.id===id);if(seek&&b?.timestamp!=null)ws.setTime(b.timestamp/1000);if(center){requestAnimationFrame(()=>document.querySelector(`.block[data-id="${id}"]`)?.scrollIntoView({block:'center',behavior:'smooth'}))}}
-function change(id,fn){const b=blocks.find(x=>x.id===id);if(!b)return;fn(b);save();render()}
-function waveInit(data){if(ws)ws.destroy();ws=WaveSurfer.create({container:'#waveform',url:data,height:Math.max(80,innerHeight*.30),waveColor:'#527985',progressColor:'#62d6ff',cursorColor:'#fff',cursorWidth:2,barWidth:2,barGap:1,normalize:true,autoScroll:true,autoCenter:true,dragToSeek:true,minPxPerSec:zoom});ws.on('ready',()=>{ws.setPlaybackRate(speed);$('#nowLabel').textContent=fmt(0).slice(1,-1);});ws.on('play',()=>{tick();updatePlay()});ws.on('pause',updatePlay);ws.on('finish',updatePlay);}
-function updatePlay(){$('#playBtn').textContent=ws&&!ws.isPlaying()?'▶':'❚❚'}
-function tick(){if(!ws||!ws.isPlaying())return;let t=getTime();$('#nowLabel').textContent=fmt(t).slice(1,-1);let stamped=blocks.filter(b=>b.timestamp!=null);if(stamped.length){let closest=stamped.reduce((a,b)=>Math.abs(b.timestamp-t)<Math.abs(a.timestamp-t)?b:a);if(closest.id!==activeId){activeId=closest.id;render();if(lastAutoId!==closest.id){lastAutoId=closest.id;document.querySelector(`.block[data-id="${closest.id}"]`)?.scrollIntoView({block:'center',behavior:'smooth'})}}}raf=requestAnimationFrame(tick)}
-function stamp(id){change(id,b=>b.timestamp=getTime());activeId=id;render();document.querySelector(`.block[data-id="${id}"]`)?.classList.add('flash')}
-function showSheet(id){$('#overlay').innerHTML=`<div class="sheet-backdrop"><div class="sheet"><div class="handle"></div><button data-menu="edit">Edit Line</button><button data-menu="above">Insert Above</button><button data-menu="below">Insert Below</button><button class="delete" data-menu="delete">Delete Line</button></div></div>`;const close=()=>$('#overlay').innerHTML='';$('.sheet-backdrop').onclick=e=>{if(e.target===e.currentTarget)close()};$('.sheet').onclick=e=>{let action=e.target.dataset.menu;if(!action)return;if(action==='edit'){close();editText(id)}else {let i=blocks.findIndex(b=>b.id===id);if(action==='above')blocks.splice(i,0,{id:ids(),text:'',timestamp:null});if(action==='below')blocks.splice(i+1,0,{id:ids(),text:'',timestamp:null});if(action==='delete')blocks.splice(i,1);if(activeId===id)activeId=blocks[Math.min(i,blocks.length-1)]?.id||null;save();render();close()}}}
-function editText(id){let b=blocks.find(x=>x.id===id);$('#overlay').innerHTML=`<div class="modal-backdrop"><form class="modal"><strong>Edit line</strong><input id="editLine" value="${escapeHTML(b.text)}" autocomplete="off"><div class="modal-actions"><button type="button" data-close>Cancel</button><button class="primary">Save</button></div></form></div>`;let inp=$('#editLine');inp.focus();inp.select();$('.modal-backdrop').onclick=e=>{if(e.target===e.currentTarget)$('#overlay').innerHTML=''};$('form.modal').onsubmit=e=>{e.preventDefault();change(id,x=>x.text=inp.value);$('#overlay').innerHTML=''};$('[data-close]').onclick=()=>$('#overlay').innerHTML=''}
-function editTime(id){let b=blocks.find(x=>x.id===id), initial=b.timestamp==null?'':(b.timestamp/1000).toFixed(2);$('#overlay').innerHTML=`<div class="modal-backdrop"><form class="modal"><strong>Timestamp (seconds)</strong><input id="editTime" type="number" min="0" step="0.01" inputmode="decimal" value="${initial}" placeholder="e.g. 83.45"><div class="modal-actions"><button type="button" data-close>Cancel</button><button class="primary">Save</button></div></form></div>`;let inp=$('#editTime');inp.focus();$('.modal-backdrop').onclick=e=>{if(e.target===e.currentTarget)$('#overlay').innerHTML=''};$('form.modal').onsubmit=e=>{e.preventDefault();let v=inp.value.trim();change(id,x=>x.timestamp=v===''?null:Math.max(0,Math.round(Number(v)*1000)));$('#overlay').innerHTML=''};$('[data-close]').onclick=()=>$('#overlay').innerHTML=''}
-$('#lyricsList').addEventListener('click',e=>{let block=e.target.closest('.block');if(!block)return;let id=block.dataset.id,act=e.target.dataset.act;if(act==='plus')change(id,b=>b.timestamp=Math.max(0,(b.timestamp??getTime())+10));else if(act==='minus')change(id,b=>b.timestamp=Math.max(0,(b.timestamp??getTime())-10));else if(act==='time')editTime(id);else if(act==='stamp')stamp(id);else if(act==='from'){let b=blocks.find(x=>x.id===id);if(b.timestamp!=null){ws.setTime(Math.max(0,b.timestamp-1000)/1000);ws.play()}}else if(act==='more')showSheet(id);else if(act==='select')select(id,true,false)});
-$('#playBtn').onclick=()=>ws?.playPause();$('#back5').onclick=()=>ws&&ws.setTime(Math.max(0,ws.getCurrentTime()-5));$('#forward5').onclick=()=>ws&&ws.setTime(Math.min(ws.getDuration(),ws.getCurrentTime()+5));
-$('#speedSlider').oninput=e=>{speed=+e.target.value;$('#speedLabel').textContent=speed.toFixed(2)+'×';if(ws)ws.setPlaybackRate(speed);zoom=Math.round(80/speed);if(ws)ws.zoom(zoom);save()};
-$('#exportBtn').onclick=()=>{let content=blocks.filter(b=>b.timestamp!=null).map(b=>fmt(b.timestamp)+' '+b.text).join('\n');let a=document.createElement('a');a.href=URL.createObjectURL(new Blob([content],{type:'text/plain;charset=utf-8'}));a.download=(audioName||'lyrics').replace(/\.[^.]+$/,'')+'.lrc';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),500)};
-$('#textInput').onchange=e=>{let f=e.target.files[0];if(!f)return;let r=new FileReader;r.onload=()=>$('#lyricsInput').value=r.result;r.readAsText(f,'UTF-8')};
-$('#beginBtn').onclick=()=>{let f=$('#audioInput').files[0];if(!f){$('#startNotice').textContent='Choose an audio file first.';return} blocks=makeBlocks($('#lyricsInput').value);activeId=blocks[0]?.id||null;audioName=f.name;let r=new FileReader;r.onload=()=>{audioData=r.result;speed=1;zoom=80;save();setScreen(true);waveInit(audioData);render()};r.readAsDataURL(f)};
-function addPinch(){let el=$('#waveform');el.addEventListener('touchstart',e=>{if(e.touches.length===2){pinch={distance:Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY),zoom};}}, {passive:true});el.addEventListener('touchmove',e=>{if(!pinch||e.touches.length!==2)return;let d=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);zoom=Math.max(15,Math.min(500,pinch.zoom*d/pinch.distance));ws?.zoom(zoom);save()}, {passive:true});el.addEventListener('touchend',e=>{if(e.touches.length<2)pinch=null},{passive:true})}addPinch();
-try{let saved=JSON.parse(localStorage.getItem(storeKey)||'null');if(saved?.audioData&&Array.isArray(saved.blocks)){({blocks,speed,zoom,audioName,audioData}=saved);blocks=blocks.map(b=>({id:b.id||ids(),text:String(b.text??''),timestamp:Number.isFinite(b.timestamp)?b.timestamp:null}));activeId=blocks[0]?.id||null;$('#speedSlider').value=speed;$('#speedLabel').textContent=speed.toFixed(2)+'×';setScreen(true);render();waveInit(audioData)}}catch(e){console.warn('No usable saved session',e)}
-})();
-</script></body></html>
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,viewport-fit=cover"
+    />
+    <title>Lyric Sync</title>
+    <script src="https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/wavesurfer.min.js"></script>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #1a1a1a;
+        --panel: #242424;
+        --panel2: #2e2e2e;
+        --ink: #eee;
+        --muted: #aaa;
+        --accent: #62d6ff;
+        --danger: #ff7878;
+      }
+      * {
+        box-sizing: border-box;
+        -webkit-tap-highlight-color: transparent;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: var(--bg);
+        color: var(--ink);
+        font:
+          15px/1.35 system-ui,
+          -apple-system,
+          Segoe UI,
+          sans-serif;
+        overflow: hidden;
+      }
+      button,
+      input,
+      textarea {
+        font: inherit;
+      }
+      button {
+        touch-action: manipulation;
+        border: 0;
+        color: var(--ink);
+        background: #3b3b3b;
+        border-radius: 8px;
+        cursor: pointer;
+        transition:
+          filter 0.08s,
+          transform 0.08s;
+      }
+      button:active {
+        filter: brightness(1.45);
+        transform: scale(0.96);
+      }
+      .screen {
+        height: 100dvh;
+      }
+      .hidden {
+        display: none !important;
+      }
+      /* Start */
+      #startScreen {
+        overflow: auto;
+        padding: clamp(20px, 7vw, 48px);
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        max-width: 700px;
+        margin: auto;
+      }
+      h1 {
+        margin: 0 0 8px;
+        font-size: clamp(26px, 7vw, 38px);
+      }
+      .hint {
+        color: var(--muted);
+        margin: 0;
+      }
+      .field {
+        display: grid;
+        gap: 8px;
+      }
+      .upload {
+        background: var(--panel);
+        border: 1px solid #444;
+        border-radius: 12px;
+        padding: 14px;
+      }
+      .upload input {
+        width: 100%;
+        color: var(--muted);
+      }
+      textarea {
+        width: 100%;
+        min-height: 44vh;
+        resize: vertical;
+        background: #111;
+        color: var(--ink);
+        border: 1px solid #4b4b4b;
+        border-radius: 10px;
+        padding: 12px;
+      }
+      .primary {
+        background: var(--accent);
+        color: #09212b;
+        font-weight: 800;
+        padding: 14px;
+        font-size: 17px;
+      }
+      .notice {
+        color: #ffd477;
+        min-height: 1.3em;
+      }
+      /* Sync */
+      #syncScreen {
+        display: grid;
+        grid-template-rows: 30dvh 60dvh 10dvh;
+        min-height: 100dvh;
+      }
+      .wave-area {
+        position: relative;
+        min-height: 0;
+        border-bottom: 1px solid #444;
+        background: #151515;
+        overflow: hidden;
+      }
+      .wave-toolbar {
+        position: absolute;
+        z-index: 3;
+        left: 8px;
+        top: 8px;
+        right: 8px;
+        display: flex;
+        justify-content: space-between;
+        pointer-events: none;
+        font-size: 12px;
+        color: #b9dce7;
+        text-shadow: 0 1px 2px #000;
+      }
+      .wave-toolbar > * {
+        background: #0008;
+        padding: 3px 6px;
+        border-radius: 5px;
+      }
+      #waveform {
+        height: 100%;
+        touch-action: pan-y;
+      }
+      .lyrics {
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        background: #1e1e1e;
+        scroll-behavior: smooth;
+      }
+      .block {
+        min-height: 98px;
+        display: flex;
+        gap: 7px;
+        padding: 7px 8px;
+        border-bottom: 1px solid #383838;
+        will-change: transform;
+        transform: translateZ(0);
+        transition:
+          background 0.12s,
+          box-shadow 0.12s;
+      }
+      .block.active {
+        background: #17313a;
+        box-shadow: inset 4px 0 var(--accent);
+      }
+      .left {
+        width: 83px;
+        flex: none;
+        display: grid;
+        grid-template-rows: 1fr 1.25fr 1fr;
+        gap: 4px;
+      }
+      .stamp-time {
+        font-size: 12px;
+        padding: 2px 3px;
+        background: #2a2a2a;
+        white-space: nowrap;
+      }
+      .nudge {
+        font-size: 11px;
+      }
+      .line {
+        min-width: 0;
+        flex: 1;
+        padding: 9px 3px;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        align-self: center;
+        cursor: pointer;
+      }
+      .line.empty:before {
+        content: "Blank line";
+        color: #747474;
+        font-style: italic;
+      }
+      .right {
+        width: 80px;
+        flex: none;
+        display: grid;
+        grid-template-rows: 22px 1fr 22px;
+        gap: 4px;
+      }
+      .icon {
+        padding: 0;
+        font-size: 16px;
+        background: #303030;
+      }
+      .stamp {
+        min-height: 48px;
+        background: #ffb648;
+        color: #251600;
+        font-weight: 900;
+        font-size: 13px;
+        letter-spacing: 0.5px;
+      }
+      .transport {
+        position: relative;
+        z-index: 5;
+        border-top: 1px solid #4a4a4a;
+        background: #252525;
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        padding: 6px max(8px, env(safe-area-inset-right))
+          max(6px, env(safe-area-inset-bottom))
+          max(8px, env(safe-area-inset-left));
+        min-width: 0;
+      }
+      .transport button {
+        height: 38px;
+        padding: 0 10px;
+        font-size: 16px;
+      }
+      .play {
+        background: var(--accent) !important;
+        color: #09212b !important;
+        font-weight: 900;
+        font-size: 18px !important;
+        min-width: 52px;
+      }
+      .speed {
+        display: grid;
+        gap: 1px;
+        min-width: 70px;
+        flex: 1;
+        color: var(--muted);
+        font-size: 11px;
+        text-align: center;
+      }
+      .speed input {
+        width: 100%;
+        accent-color: var(--accent);
+      }
+      .export {
+        font-size: 12px !important;
+        padding: 0 8px !important;
+      }
+      /* dialogs */
+      .sheet-backdrop,
+      .modal-backdrop {
+        position: fixed;
+        z-index: 20;
+        inset: 0;
+        background: #0009;
+        display: flex;
+        align-items: flex-end;
+      }
+      .sheet {
+        width: 100%;
+        background: #303030;
+        border-radius: 16px 16px 0 0;
+        padding: 10px 14px calc(14px + env(safe-area-inset-bottom));
+        display: grid;
+        gap: 7px;
+      }
+      .sheet .handle {
+        height: 4px;
+        width: 40px;
+        background: #777;
+        border-radius: 9px;
+        margin: 2px auto 7px;
+      }
+      .sheet button {
+        padding: 13px;
+        text-align: left;
+        background: #3d3d3d;
+      }
+      .sheet .delete {
+        color: #ff9b9b;
+      }
+      .modal-backdrop {
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+      }
+      .modal {
+        background: #303030;
+        width: min(420px, 100%);
+        padding: 18px;
+        border-radius: 14px;
+        display: grid;
+        gap: 12px;
+      }
+      .modal input {
+        background: #161616;
+        color: #eee;
+        border: 1px solid #666;
+        border-radius: 7px;
+        padding: 11px;
+        width: 100%;
+      }
+      .modal-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+      .modal-actions button {
+        padding: 9px 13px;
+      }
+      .flash {
+        animation: flash 0.3s ease;
+      }
+      @keyframes flash {
+        50% {
+          background: #4c7b88;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <section id="startScreen" class="screen">
+      <h1>Lyric Sync</h1>
+      <p class="hint">
+        Everything stays on this device. Add audio and lyrics, then stamp each
+        line as it plays.
+      </p>
+      <label class="field upload"
+        >Audio file
+        <input id="audioInput" type="file" accept="audio/*" /></label
+      ><label class="field upload"
+        >Lyrics .txt (UTF-8, optional)
+        <input id="textInput" type="file" accept=".txt,text/plain" /></label
+      ><label class="field"
+        >Lyrics — one block per line
+        <textarea
+          id="lyricsInput"
+          placeholder="Paste lyrics here…&#10;&#10;Empty lines are kept as blank blocks."
+        ></textarea>
+      </label>
+      <div id="startNotice" class="notice"></div>
+      <button id="beginBtn" class="primary">Start syncing</button>
+    </section>
+    <section id="syncScreen" class="screen hidden">
+      <div class="wave-area">
+        <div class="wave-toolbar">
+          <span id="nowLabel">00:00.00</span><span>Pinch to zoom</span>
+        </div>
+        <div id="waveform"></div>
+      </div>
+      <main id="lyricsList" class="lyrics" aria-label="Lyric blocks"></main>
+      <footer class="transport">
+        <button id="back5" aria-label="Back 5 seconds">⏪⏪</button
+        ><button id="playBtn" class="play" aria-label="Play or pause">▶</button
+        ><button id="forward5" aria-label="Forward 5 seconds">⏩⏩</button
+        ><label class="speed"
+          ><span id="speedLabel">1.00×</span
+          ><input
+            id="speedSlider"
+            type="range"
+            min="0.25"
+            max="1.5"
+            step="0.05"
+            value="1" /></label
+        ><button id="exportBtn" class="export">Export .lrc</button>
+      </footer>
+    </section>
+    <div id="overlay"></div>
+    <script>
+      (() => {
+        "use strict";
+        const $ = (s) => document.querySelector(s),
+          storeKey = "lyric-sync-session-v1";
+        let ws = null,
+          blocks = [],
+          activeId = null,
+          speed = 1,
+          zoom = 80,
+          audioName = "",
+          audioData = null,
+          raf = 0,
+          lastAutoId = null,
+          pinch = null;
+        const ids = () =>
+          crypto.randomUUID
+            ? crypto.randomUUID()
+            : "b" + Date.now() + Math.random().toString(36).slice(2);
+        const fmt = (ms) => {
+          if (ms == null) return "[--:--]";
+          ms = Math.max(0, Math.round(ms));
+          let c = Math.floor(ms / 10) % 100,
+            s = Math.floor(ms / 1000) % 60,
+            m = Math.floor(ms / 60000);
+          return `[${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${String(c).padStart(2, "0")}]`;
+        };
+        const getTime = () => (ws ? Math.round(ws.getCurrentTime() * 1000) : 0);
+        function save() {
+          try {
+            localStorage.setItem(
+              storeKey,
+              JSON.stringify({ audioName, audioData, blocks, speed, zoom }),
+            );
+          } catch (e) {
+            console.warn(e);
+            $("#startNotice").textContent =
+              "Session saved without audio: browser storage is full.";
+          }
+        }
+        function setScreen(sync) {
+          $("#startScreen").classList.toggle("hidden", sync);
+          $("#syncScreen").classList.toggle("hidden", !sync);
+        }
+        function makeBlocks(text) {
+          return text
+            .split("\n")
+            .map((text) => ({ id: ids(), text, timestamp: null }));
+        }
+        function render() {
+          const list = $("#lyricsList");
+          list.innerHTML = "";
+          blocks.forEach((b, i) => {
+            const el = document.createElement("article");
+            el.className = "block" + (b.id === activeId ? " active" : "");
+            el.dataset.id = b.id;
+            el.innerHTML = `<div class="left"><button class="nudge" data-act="plus">+10</button><button class="stamp-time" data-act="time">${fmt(b.timestamp)}</button><button class="nudge" data-act="minus">−10</button></div><div class="line ${b.text === "" ? "empty" : ""}" data-act="select">${escapeHTML(b.text)}</div><div class="right"><button class="icon" data-act="from" aria-label="Play from here">▶</button><button class="stamp" data-act="stamp">STAMP</button><button class="icon" data-act="more" aria-label="More options">⋯</button></div>`;
+            list.append(el);
+          });
+        }
+        function escapeHTML(s) {
+          return s.replace(
+            /[&<>'"]/g,
+            (c) =>
+              ({
+                "&": "&amp;",
+                "<": "&lt;",
+                ">": "&gt;",
+                "'": "&#39;",
+                '"': "&quot;",
+              })[c],
+          );
+        }
+        function select(id, seek = false, center = false) {
+          activeId = id;
+          render();
+          const b = blocks.find((x) => x.id === id);
+          if (seek && b?.timestamp != null) ws.setTime(b.timestamp / 1000);
+          if (center) {
+            requestAnimationFrame(() =>
+              document
+                .querySelector(`.block[data-id="${id}"]`)
+                ?.scrollIntoView({ block: "center", behavior: "smooth" }),
+            );
+          }
+        }
+        function change(id, fn) {
+          const b = blocks.find((x) => x.id === id);
+          if (!b) return;
+          fn(b);
+          save();
+          render();
+        }
+        function waveInit(data) {
+          if (ws) ws.destroy();
+          ws = WaveSurfer.create({
+            container: "#waveform",
+            url: data,
+            height: Math.max(80, innerHeight * 0.3),
+            waveColor: "#527985",
+            progressColor: "#62d6ff",
+            cursorColor: "#fff",
+            cursorWidth: 2,
+            barWidth: 2,
+            barGap: 1,
+            normalize: true,
+            autoScroll: true,
+            autoCenter: true,
+            dragToSeek: true,
+            minPxPerSec: zoom,
+          });
+          ws.on("ready", () => {
+            ws.setPlaybackRate(speed);
+            $("#nowLabel").textContent = fmt(0).slice(1, -1);
+          });
+          ws.on("play", () => {
+            tick();
+            updatePlay();
+          });
+          ws.on("pause", updatePlay);
+          ws.on("finish", updatePlay);
+        }
+        function updatePlay() {
+          $("#playBtn").textContent = ws && !ws.isPlaying() ? "▶" : "❚❚";
+        }
+        function tick() {
+          if (!ws || !ws.isPlaying()) return;
+          let t = getTime();
+          $("#nowLabel").textContent = fmt(t).slice(1, -1);
+          let stamped = blocks.filter((b) => b.timestamp != null);
+          if (stamped.length) {
+            let closest = stamped.reduce((a, b) =>
+              Math.abs(b.timestamp - t) < Math.abs(a.timestamp - t) ? b : a,
+            );
+            if (closest.id !== activeId) {
+              activeId = closest.id;
+              render();
+              if (lastAutoId !== closest.id) {
+                lastAutoId = closest.id;
+                document
+                  .querySelector(`.block[data-id="${closest.id}"]`)
+                  ?.scrollIntoView({ block: "center", behavior: "smooth" });
+              }
+            }
+          }
+          raf = requestAnimationFrame(tick);
+        }
+        function stamp(id) {
+          change(id, (b) => (b.timestamp = getTime()));
+          activeId = id;
+          render();
+          document
+            .querySelector(`.block[data-id="${id}"]`)
+            ?.classList.add("flash");
+        }
+        function showSheet(id) {
+          $("#overlay").innerHTML =
+            `<div class="sheet-backdrop"><div class="sheet"><div class="handle"></div><button data-menu="edit">Edit Line</button><button data-menu="above">Insert Above</button><button data-menu="below">Insert Below</button><button class="delete" data-menu="delete">Delete Line</button></div></div>`;
+          const close = () => ($("#overlay").innerHTML = "");
+          $(".sheet-backdrop").onclick = (e) => {
+            if (e.target === e.currentTarget) close();
+          };
+          $(".sheet").onclick = (e) => {
+            let action = e.target.dataset.menu;
+            if (!action) return;
+            if (action === "edit") {
+              close();
+              editText(id);
+            } else {
+              let i = blocks.findIndex((b) => b.id === id);
+              if (action === "above")
+                blocks.splice(i, 0, { id: ids(), text: "", timestamp: null });
+              if (action === "below")
+                blocks.splice(i + 1, 0, {
+                  id: ids(),
+                  text: "",
+                  timestamp: null,
+                });
+              if (action === "delete") blocks.splice(i, 1);
+              if (activeId === id)
+                activeId = blocks[Math.min(i, blocks.length - 1)]?.id || null;
+              save();
+              render();
+              close();
+            }
+          };
+        }
+        function editText(id) {
+          let b = blocks.find((x) => x.id === id);
+          $("#overlay").innerHTML =
+            `<div class="modal-backdrop"><form class="modal"><strong>Edit line</strong><input id="editLine" value="${escapeHTML(b.text)}" autocomplete="off"><div class="modal-actions"><button type="button" data-close>Cancel</button><button class="primary">Save</button></div></form></div>`;
+          let inp = $("#editLine");
+          inp.focus();
+          inp.select();
+          $(".modal-backdrop").onclick = (e) => {
+            if (e.target === e.currentTarget) $("#overlay").innerHTML = "";
+          };
+          $("form.modal").onsubmit = (e) => {
+            e.preventDefault();
+            change(id, (x) => (x.text = inp.value));
+            $("#overlay").innerHTML = "";
+          };
+          $("[data-close]").onclick = () => ($("#overlay").innerHTML = "");
+        }
+        function editTime(id) {
+          let b = blocks.find((x) => x.id === id),
+            initial =
+              b.timestamp == null ? "" : (b.timestamp / 1000).toFixed(2);
+          $("#overlay").innerHTML =
+            `<div class="modal-backdrop"><form class="modal"><strong>Timestamp (seconds)</strong><input id="editTime" type="number" min="0" step="0.01" inputmode="decimal" value="${initial}" placeholder="e.g. 83.45"><div class="modal-actions"><button type="button" data-close>Cancel</button><button class="primary">Save</button></div></form></div>`;
+          let inp = $("#editTime");
+          inp.focus();
+          $(".modal-backdrop").onclick = (e) => {
+            if (e.target === e.currentTarget) $("#overlay").innerHTML = "";
+          };
+          $("form.modal").onsubmit = (e) => {
+            e.preventDefault();
+            let v = inp.value.trim();
+            change(
+              id,
+              (x) =>
+                (x.timestamp =
+                  v === "" ? null : Math.max(0, Math.round(Number(v) * 1000))),
+            );
+            $("#overlay").innerHTML = "";
+          };
+          $("[data-close]").onclick = () => ($("#overlay").innerHTML = "");
+        }
+        $("#lyricsList").addEventListener("click", (e) => {
+          let block = e.target.closest(".block");
+          if (!block) return;
+          let id = block.dataset.id,
+            act = e.target.dataset.act;
+          if (act === "plus")
+            change(
+              id,
+              (b) =>
+                (b.timestamp = Math.max(0, (b.timestamp ?? getTime()) + 10)),
+            );
+          else if (act === "minus")
+            change(
+              id,
+              (b) =>
+                (b.timestamp = Math.max(0, (b.timestamp ?? getTime()) - 10)),
+            );
+          else if (act === "time") editTime(id);
+          else if (act === "stamp") stamp(id);
+          else if (act === "from") {
+            let b = blocks.find((x) => x.id === id);
+            if (b.timestamp != null) {
+              ws.setTime(Math.max(0, b.timestamp - 1000) / 1000);
+              ws.play();
+            }
+          } else if (act === "more") showSheet(id);
+          else if (act === "select") select(id, true, false);
+        });
+        $("#playBtn").onclick = () => ws?.playPause();
+        $("#back5").onclick = () =>
+          ws && ws.setTime(Math.max(0, ws.getCurrentTime() - 5));
+        $("#forward5").onclick = () =>
+          ws && ws.setTime(Math.min(ws.getDuration(), ws.getCurrentTime() + 5));
+        $("#speedSlider").oninput = (e) => {
+          speed = +e.target.value;
+          $("#speedLabel").textContent = speed.toFixed(2) + "×";
+          if (ws) ws.setPlaybackRate(speed);
+          zoom = Math.round(80 / speed);
+          if (ws) ws.zoom(zoom);
+          save();
+        };
+        $("#exportBtn").onclick = () => {
+          let content = blocks
+            .filter((b) => b.timestamp != null)
+            .map((b) => fmt(b.timestamp) + " " + b.text)
+            .join("\n");
+          let a = document.createElement("a");
+          a.href = URL.createObjectURL(
+            new Blob([content], { type: "text/plain;charset=utf-8" }),
+          );
+          a.download = (audioName || "lyrics").replace(/\.[^.]+$/, "") + ".lrc";
+          a.click();
+          setTimeout(() => URL.revokeObjectURL(a.href), 500);
+        };
+        $("#textInput").onchange = (e) => {
+          let f = e.target.files[0];
+          if (!f) return;
+          let r = new FileReader();
+          r.onload = () => ($("#lyricsInput").value = r.result);
+          r.readAsText(f, "UTF-8");
+        };
+        $("#beginBtn").onclick = () => {
+          let f = $("#audioInput").files[0];
+          if (!f) {
+            $("#startNotice").textContent = "Choose an audio file first.";
+            return;
+          }
+          blocks = makeBlocks($("#lyricsInput").value);
+          activeId = blocks[0]?.id || null;
+          audioName = f.name;
+          let r = new FileReader();
+          r.onload = () => {
+            audioData = r.result;
+            speed = 1;
+            zoom = 80;
+            save();
+            setScreen(true);
+            waveInit(audioData);
+            render();
+          };
+          r.readAsDataURL(f);
+        };
+        function addPinch() {
+          let el = $("#waveform");
+          el.addEventListener(
+            "touchstart",
+            (e) => {
+              if (e.touches.length === 2) {
+                pinch = {
+                  distance: Math.hypot(
+                    e.touches[0].clientX - e.touches[1].clientX,
+                    e.touches[0].clientY - e.touches[1].clientY,
+                  ),
+                  zoom,
+                };
+              }
+            },
+            { passive: true },
+          );
+          el.addEventListener(
+            "touchmove",
+            (e) => {
+              if (!pinch || e.touches.length !== 2) return;
+              let d = Math.hypot(
+                e.touches[0].clientX - e.touches[1].clientX,
+                e.touches[0].clientY - e.touches[1].clientY,
+              );
+              zoom = Math.max(
+                15,
+                Math.min(500, (pinch.zoom * d) / pinch.distance),
+              );
+              ws?.zoom(zoom);
+              save();
+            },
+            { passive: true },
+          );
+          el.addEventListener(
+            "touchend",
+            (e) => {
+              if (e.touches.length < 2) pinch = null;
+            },
+            { passive: true },
+          );
+        }
+        addPinch();
+        try {
+          let saved = JSON.parse(localStorage.getItem(storeKey) || "null");
+          if (saved?.audioData && Array.isArray(saved.blocks)) {
+            ({ blocks, speed, zoom, audioName, audioData } = saved);
+            blocks = blocks.map((b) => ({
+              id: b.id || ids(),
+              text: String(b.text ?? ""),
+              timestamp: Number.isFinite(b.timestamp) ? b.timestamp : null,
+            }));
+            activeId = blocks[0]?.id || null;
+            $("#speedSlider").value = speed;
+            $("#speedLabel").textContent = speed.toFixed(2) + "×";
+            setScreen(true);
+            render();
+            waveInit(audioData);
+          }
+        } catch (e) {
+          console.warn("No usable saved session", e);
+        }
+      })();
+    </script>
+  </body>
+</html>
