@@ -352,6 +352,7 @@
         >Lyrics — one block per line
         <textarea
           id="lyricsInput"
+          dir="auto"
           placeholder="Paste lyrics here…&#10;&#10;Empty lines are kept as blank blocks."
         ></textarea>
       </label>
@@ -442,7 +443,7 @@
             const el = document.createElement("article");
             el.className = "block" + (b.id === activeId ? " active" : "");
             el.dataset.id = b.id;
-            el.innerHTML = `<div class="left"><button class="nudge" data-act="plus">+0.1</button><button class="stamp-time" data-act="time">${fmt(b.timestamp)}</button><button class="nudge" data-act="minus">−0.1</button></div><div class="line ${b.text === "" ? "empty" : ""}" data-act="select">${escapeHTML(b.text)}</div><div class="right"><button class="icon" data-act="from" aria-label="Play from here">▶</button><button class="stamp" data-act="stamp">STAMP</button><button class="icon" data-act="more" aria-label="More options">⋯</button></div>`;
+            el.innerHTML = `<div class="left"><button class="nudge" data-act="plus">+0.1</button><button class="stamp-time" data-act="time">${fmt(b.timestamp)}</button><button class="nudge" data-act="minus">−0.1</button></div><div class="line ${b.text === "" ? "empty" : ""}" data-act="select" dir="auto">${escapeHTML(b.text)}</div><div class="right"><button class="icon" data-act="from" aria-label="Play from here">▶</button><button class="stamp" data-act="stamp">STAMP</button><button class="icon" data-act="more" aria-label="More options">⋯</button></div>`;
             list.append(el);
           });
         }
@@ -604,7 +605,7 @@
         function editText(id) {
           let b = blocks.find((x) => x.id === id);
           $("#overlay").innerHTML =
-            `<div class="modal-backdrop"><form class="modal"><strong>Edit line</strong><input id="editLine" value="${escapeHTML(b.text)}" autocomplete="off"><div class="modal-actions"><button type="button" data-close>Cancel</button><button class="primary">Save</button></div></form></div>`;
+            `<div class="modal-backdrop"><form class="modal"><strong>Edit line</strong><input id="editLine" dir="auto" value="${escapeHTML(b.text)}" autocomplete="off"><div class="modal-actions"><button type="button" data-close>Cancel</button><button class="primary">Save</button></div></form></div>`;
           let inp = $("#editLine");
           inp.focus();
           inp.select();
