@@ -3,13 +3,9 @@ name: Build Debug APK and Release
 on:
   push:
     tags:
-      - 'v*'               # Triggers on tags like v1.0.0, v2.1.0, etc.
-  workflow_dispatch:       # Allows manual trigger from GitHub UI
+      - 'v*'
+  workflow_dispatch:
 
-# FIX: GitHub's default GITHUB_TOKEN for new repositories is READ-ONLY.
-# Creating a release and uploading the APK requires write access to
-# repository contents. Without this block the release step fails with
-# 403 "Resource not accessible by integration".
 permissions:
   contents: write
 
@@ -19,6 +15,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # needed for commit count
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -40,8 +38,6 @@ jobs:
       - name: Patch HTML to use local WaveSurfer
         run: sed -i 's|https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/wavesurfer.min.js|wavesurfer.min.js|g' www/index.html
 
-      # capacitor.config.json already exists in the repo, so this step is
-      # optional — kept here to match the original pipeline.
       - name: Init Capacitor
         run: npx cap init LyricSync com.msadrashakouri.lyricsync
 
@@ -53,15 +49,42 @@ jobs:
 
       - name: Sync Android project
         run: npx cap sync
-            
-      - name: Cache Gradle distribution
-        uses: actions/cache@v4
-        with:
-          path: ~/.gradle/wrapper/dists
-          key: gradle-dist-${{ hashFiles('android/gradle/wrapper/gradle-wrapper.properties') }}
-          restore-keys: |
-            gradle-dist-
 
+      # --- Versioning ---
+      - name: Set version from tag
+        run: |
+          VERSION_NAME=${GITHUB_REF#refs/tags/v}
+          VERSION_CODE=$(git rev-list --count HEAD)
+          sed -i "s/versionName .*/versionName \"$VERSION_NAME\"/" android/app/build.gradle
+          sed -i "s/versionCode .*/versionCode $VERSION_CODE/" android/app/build.gradle
+
+      # --- Keystore ---
+      - name: Decode keystore
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android/app/keystore.jks
+
+      - name: Configure Gradle to use custom keystore
+        run: |
+          cat >> android/app/build.gradle << 'EOF'
+
+          android {
+              signingConfigs {
+                  debug {
+                      storeFile file('keystore.jks')
+                      storePassword 'android'
+                      keyAlias 'lyric-sync'
+                      keyPassword 'android'
+                  }
+              }
+              buildTypes {
+                  debug {
+                      signingConfig signingConfigs.debug
+                  }
+              }
+          }
+          EOF
+
+      # --- Build with retry ---
       - name: Build Debug APK
         run: |
           cd android
@@ -72,8 +95,8 @@ jobs:
               echo "Build succeeded!"
               exit 0
             else
-              echo "Build failed, retrying in 5 seconds..."
-              sleep 5
+              echo "Build failed, retrying in 10 seconds..."
+              sleep 10
             fi
           done
           echo "All build attempts failed."
@@ -82,8 +105,6 @@ jobs:
       - name: Rename APK for clarity
         run: cp android/app/build/outputs/apk/debug/app-debug.apk lyric-sync-debug.apk
 
-      # Always keep the APK as a workflow artifact, so manual
-      # (workflow_dispatch) runs are also downloadable from the Actions UI.
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
@@ -92,7 +113,7 @@ jobs:
           if-no-files-found: error
 
       - name: Create Release and Upload APK
-        if: startsWith(github.ref, 'refs/tags/')   # only if a tag was pushed
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: lyric-sync-debug.apk
