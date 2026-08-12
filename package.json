@@ -1,0 +1,13 @@
+{
+  "name": "lyric-sync",
+  "version": "1.0.0",
+  "description": "Mobile waveform lyric sync tool",
+  "main": "index.js",
+  "scripts": {
+    "build": "echo 'Build step'"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.0.0",
+    "@capacitor/core": "^6.0.0"
+  }
+}

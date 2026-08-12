@@ -1,0 +1,69 @@
+name: Build Debug APK and Release
+
+on:
+  push:
+    tags:
+      - 'v*'               # Triggers on tags like v1.0.0, v2.1.0, etc.
+  workflow_dispatch:       # Allows manual trigger from GitHub UI
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Capacitor
+        run: npm install -g @capacitor/cli
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Prepare www folder
+        run: mkdir -p www
+
+      - name: Copy HTML to www
+        run: cp lyric_sync.html www/index.html
+
+      - name: Download WaveSurfer locally
+        run: curl -L -o www/wavesurfer.min.js https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/wavesurfer.min.js
+
+      - name: Patch HTML to use local WaveSurfer
+        run: sed -i 's|https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/wavesurfer.min.js|wavesurfer.min.js|g' www/index.html
+
+      - name: Init Capacitor
+        run: npx cap init LyricSync com.msadrashakouri.lyricsync
+
+      - name: Add Android platform
+        run: npx cap add android
+
+      - name: Copy assets to Android
+        run: npx cap copy
+
+      - name: Sync Android project
+        run: npx cap sync
+
+      - name: Build Debug APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Rename APK for clarity
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk lyric-sync-debug.apk
+
+      - name: Create Release and Upload APK
+        if: startsWith(github.ref, 'refs/tags/')   # only if a tag was pushed
+        uses: softprops/action-gh-release@v1
+        with:
+          files: lyric-sync-debug.apk
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

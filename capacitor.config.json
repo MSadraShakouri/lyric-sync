@@ -1,0 +1,8 @@
+{
+  "appId": "com.msadrashakouri.lyricsync",
+  "appName": "Lyric Sync",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "https"
+  }
+}
