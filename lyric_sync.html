@@ -518,17 +518,40 @@
             $("#nowLabel").textContent = fmt(0).slice(1, -1);
           });
           ws.on("play", () => {
+            // Cancel any existing animation frame before starting a new one
+            if (raf) {
+              cancelAnimationFrame(raf);
+              raf = 0;
+            }
             tick();
             updatePlay();
           });
-          ws.on("pause", updatePlay);
-          ws.on("finish", updatePlay);
+          ws.on("pause", () => {
+            // Stop the animation loop when paused
+            if (raf) {
+              cancelAnimationFrame(raf);
+              raf = 0;
+            }
+            updatePlay();
+          });
+          ws.on("finish", () => {
+            if (raf) {
+              cancelAnimationFrame(raf);
+              raf = 0;
+            }
+            updatePlay();
+          });
         }
         function updatePlay() {
           $("#playBtn").textContent = ws && !ws.isPlaying() ? "▶" : "❚❚";
         }
         function tick() {
           if (!ws || !ws.isPlaying()) return;
+          // Clear any previous frame to avoid multiple loops
+          if (raf) {
+            cancelAnimationFrame(raf);
+            raf = 0;
+          }
           let t = getTime();
           $("#nowLabel").textContent = fmt(t).slice(1, -1);
           let stamped = blocks.filter((b) => b.timestamp != null);
@@ -543,13 +566,13 @@
             }
             // If no block found, default to first block
             if (!activeBlock && blocks.length) activeBlock = blocks[0];
-            if (closest.id !== activeId) {
-              activeId = closest.id;
+            if (activeBlock && activeBlock.id !== activeId) {
+              activeId = activeBlock.id;
               render();
-              if (lastAutoId !== closest.id) {
-                lastAutoId = closest.id;
+              if (lastAutoId !== activeBlock.id) {
+                lastAutoId = activeBlock.id;
                 document
-                  .querySelector(`.block[data-id="${closest.id}"]`)
+                  .querySelector(`.block[data-id="${activeBlock.id}"]`)
                   ?.scrollIntoView({ block: "center", behavior: "smooth" });
               }
             }
