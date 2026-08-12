@@ -634,7 +634,7 @@
           else if (act === "from") {
             let b = blocks.find((x) => x.id === id);
             if (b.timestamp != null) {
-              ws.setTime(Math.max(0, b.timestamp - 1000) / 1000);
+              ws.setTime(Math.max(0, b.timestamp) / 1000);
               ws.play();
             }
           } else if (act === "more") showSheet(id);
