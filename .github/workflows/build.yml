@@ -53,6 +53,14 @@ jobs:
 
       - name: Sync Android project
         run: npx cap sync
+            
+      - name: Cache Gradle distribution
+        uses: actions/cache@v4
+        with:
+          path: ~/.gradle/wrapper/dists
+          key: gradle-dist-${{ hashFiles('android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-dist-
 
       - name: Build Debug APK
         run: |
