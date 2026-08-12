@@ -676,7 +676,7 @@
           if (ws) ws.zoom(zoom);
           save();
         };
-        $("#exportBtn").onclick = () => {
+        $("#exportBtn").onclick = async () => {
           const content = blocks
             .filter((b) => b.timestamp != null)
             .map((b) => fmt(b.timestamp) + " " + b.text)
@@ -687,40 +687,35 @@
             return;
           }
 
-          // Check if running in Capacitor (native)
-          if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Filesystem) {
-            const { Filesystem, Directory } = window.Capacitor.Plugins.Filesystem;
+          const plugins = (window.Capacitor && window.Capacitor.Plugins) || {};
+          const Filesystem = plugins.Filesystem;
+          if (Filesystem && typeof Filesystem.writeFile === "function") {
             const fileName = (audioName || "lyrics").replace(/\.[^.]+$/, "") + ".lrc";
-
-            Filesystem.writeFile({
-              path: fileName,
-              data: content,
-              directory: Directory.EXTERNAL,   // app's own external files folder (Android/data/.../files)
-              encoding: "utf8",                // correct encoding value
-            })
-              .then((result) => {
-                // Now share the file via the Share plugin
-                if (window.Capacitor.Plugins.Share) {
-                  const { Share } = window.Capacitor.Plugins.Share;
-                  // Get the URI of the saved file
-                  return Filesystem.getUri({
-                    path: fileName,
-                    directory: Directory.EXTERNAL,
-                  }).then((uriResult) => {
-                    return Share.share({
-                      title: "Export LRC",
-                      text: "Here is your LRC file.",
-                      url: uriResult.uri,
-                      dialogTitle: "Share LRC file",
-                    });
-                  });
-                } else {
-                  alert("File saved to app folder. (Share plugin not available)");
-                }
-              })
-              .catch((err) => {
-                alert("Export failed: " + err.message);
+            try {
+              await Filesystem.writeFile({
+                path: fileName,
+                data: content,
+                directory: "EXTERNAL", // plain string, not an enum
+                encoding: "utf8",      // not "utf-8"
               });
+              const Share = plugins.Share;
+              if (Share && typeof Share.share === "function") {
+                const uriResult = await Filesystem.getUri({
+                  path: fileName,
+                  directory: "EXTERNAL",
+                });
+                await Share.share({
+                  title: "Export LRC",
+                  text: "Here is your LRC file.",
+                  files: [uriResult.uri], // array of file URIs, not `url`
+                  dialogTitle: "Share LRC file",
+                });
+              } else {
+                alert("File saved to app folder. (Share plugin not available)");
+              }
+            } catch (err) {
+              alert("Export failed: " + (err && err.message ? err.message : err));
+            }
           } else {
             // Fallback for web (original download approach)
             const a = document.createElement("a");
