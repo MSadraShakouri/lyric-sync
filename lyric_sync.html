@@ -682,20 +682,44 @@
             .map((b) => fmt(b.timestamp) + " " + b.text)
             .join("\n");
 
-          // Check if Capacitor is available and the plugin is loaded
-          if (typeof Capacitor !== 'undefined' && Capacitor.isNative && Capacitor.Plugins && Capacitor.Plugins.Filesystem) {
-            const { Filesystem, Directory } = Capacitor.Plugins.Filesystem;
+          if (!content) {
+            alert("No timestamps to export.");
+            return;
+          }
+
+          // Check if running in Capacitor (native)
+          if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Filesystem) {
+            const { Filesystem, Directory } = window.Capacitor.Plugins.Filesystem;
+            const fileName = (audioName || "lyrics").replace(/\.[^.]+$/, "") + ".lrc";
+
             Filesystem.writeFile({
-              path: (audioName || "lyrics").replace(/\.[^.]+$/, "") + ".lrc",
+              path: fileName,
               data: content,
-              directory: Directory.Downloads,
-              encoding: "utf-8",
+              directory: Directory.EXTERNAL,   // app's own external files folder (Android/data/.../files)
+              encoding: "utf8",                // correct encoding value
             })
-              .then(() => {
-                alert("File saved to Downloads folder.");
+              .then((result) => {
+                // Now share the file via the Share plugin
+                if (window.Capacitor.Plugins.Share) {
+                  const { Share } = window.Capacitor.Plugins.Share;
+                  // Get the URI of the saved file
+                  return Filesystem.getUri({
+                    path: fileName,
+                    directory: Directory.EXTERNAL,
+                  }).then((uriResult) => {
+                    return Share.share({
+                      title: "Export LRC",
+                      text: "Here is your LRC file.",
+                      url: uriResult.uri,
+                      dialogTitle: "Share LRC file",
+                    });
+                  });
+                } else {
+                  alert("File saved to app folder. (Share plugin not available)");
+                }
               })
               .catch((err) => {
-                alert("Failed to save file: " + err.message);
+                alert("Export failed: " + err.message);
               });
           } else {
             // Fallback for web (original download approach)
