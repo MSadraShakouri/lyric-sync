@@ -677,17 +677,37 @@
           save();
         };
         $("#exportBtn").onclick = () => {
-          let content = blocks
+          const content = blocks
             .filter((b) => b.timestamp != null)
             .map((b) => fmt(b.timestamp) + " " + b.text)
             .join("\n");
-          let a = document.createElement("a");
-          a.href = URL.createObjectURL(
-            new Blob([content], { type: "text/plain;charset=utf-8" }),
-          );
-          a.download = (audioName || "lyrics").replace(/\.[^.]+$/, "") + ".lrc";
-          a.click();
-          setTimeout(() => URL.revokeObjectURL(a.href), 500);
+
+          // Check if running inside Capacitor (native)
+          if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Filesystem) {
+            // Use Capacitor Filesystem plugin to save to Downloads
+            const { Filesystem, Directory } = window.Capacitor.Plugins.Filesystem;
+            Filesystem.writeFile({
+              path: (audioName || "lyrics").replace(/\.[^.]+$/, "") + ".lrc",
+              data: content,
+              directory: Directory.Downloads,
+              encoding: "utf-8",
+            })
+              .then(() => {
+                alert("File saved to Downloads folder.");
+              })
+              .catch((err) => {
+                alert("Failed to save file: " + err.message);
+              });
+          } else {
+            // Fallback for web (original download approach)
+            const a = document.createElement("a");
+            a.href = URL.createObjectURL(
+              new Blob([content], { type: "text/plain;charset=utf-8" })
+            );
+            a.download = (audioName || "lyrics").replace(/\.[^.]+$/, "") + ".lrc";
+            a.click();
+            setTimeout(() => URL.revokeObjectURL(a.href), 500);
+          }
         };
         $("#textInput").onchange = (e) => {
           let f = e.target.files[0];
