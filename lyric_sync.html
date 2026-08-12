@@ -517,9 +517,16 @@
           $("#nowLabel").textContent = fmt(t).slice(1, -1);
           let stamped = blocks.filter((b) => b.timestamp != null);
           if (stamped.length) {
-            let closest = stamped.reduce((a, b) =>
-              Math.abs(b.timestamp - t) < Math.abs(a.timestamp - t) ? b : a,
-            );
+            let activeBlock = null;
+            for (let i = blocks.length - 1; i >= 0; i--) {
+              const b = blocks[i];
+              if (b.timestamp !== null && b.timestamp <= t) {
+                activeBlock = b;
+                break;
+              }
+            }
+            // If no block found, default to first block
+            if (!activeBlock && blocks.length) activeBlock = blocks[0];
             if (closest.id !== activeId) {
               activeId = closest.id;
               render();
