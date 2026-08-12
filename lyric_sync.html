@@ -229,16 +229,17 @@
         background: #252525;
         display: flex;
         align-items: center;
-        gap: 7px;
+        gap: 4px;
+        min-height: 56px;
         padding: 6px max(8px, env(safe-area-inset-right))
           max(6px, env(safe-area-inset-bottom))
           max(8px, env(safe-area-inset-left));
         min-width: 0;
       }
       .transport button {
-        height: 38px;
-        padding: 0 10px;
-        font-size: 16px;
+        height: 32px;
+        padding: 0 8px;
+        font-size: 14px;
       }
       .play {
         background: var(--accent) !important;
@@ -263,7 +264,7 @@
       .export {
         font-size: 12px !important;
         padding: 0 8px !important;
-      }
+        flex-shrink: 0;
       /* dialogs */
       .sheet-backdrop,
       .modal-backdrop {
