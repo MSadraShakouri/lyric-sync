@@ -358,7 +358,7 @@
       </label>
       <label class="field upload"
         >Lyrics .txt (UTF-8, optional)
-        <input id="textInput" type="file" accept=".txt,text/plain" /></label>
+        <input id="textInput" type="file" accept=".txt,.lrc,text/plain" /></label>
       <div id="startNotice" class="notice"></div>
       <button id="beginBtn" class="primary">Start syncing</button>
     </section>
@@ -432,9 +432,24 @@
           $("#syncScreen").classList.toggle("hidden", !sync);
         }
         function makeBlocks(text) {
-          return text
-            .split("\n")
-            .map((text) => ({ id: ids(), text, timestamp: null }));
+          const lines = text.split("\n");
+          const result = [];
+          const timestampRegex = /^\[(\d{2}):(\d{2})\.(\d{2})\]\s*(.*)/;
+          for (const line of lines) {
+            const match = line.match(timestampRegex);
+            if (match) {
+              const minutes = parseInt(match[1], 10);
+              const seconds = parseInt(match[2], 10);
+              const centiseconds = parseInt(match[3], 10);
+              const ms = (minutes * 60 + seconds) * 1000 + centiseconds * 10;
+              const text = match[4];
+              result.push({ id: ids(), text, timestamp: ms });
+            } else {
+              // No timestamp – keep line as is
+              result.push({ id: ids(), text: line, timestamp: null });
+            }
+          }
+          return result;
         }
         function render() {
           const list = $("#lyricsList");
@@ -739,7 +754,11 @@
           let f = e.target.files[0];
           if (!f) return;
           let r = new FileReader();
-          r.onload = () => ($("#lyricsInput").value = r.result);
+          r.onload = () => {
+            // Put the raw file content into the textarea (including timestamps)
+            // `makeBlocks` will parse them when "Start syncing" is clicked
+            $("#lyricsInput").value = r.result;
+          };
           r.readAsText(f, "UTF-8");
         };
         $("#beginBtn").onclick = () => {
