@@ -401,6 +401,8 @@
           audioData = null,
           raf = 0,
           lastAutoId = null,
+          stampedCache = null,
+          blocksVersion = 0,
           pinch = null;
         const ids = () =>
           crypto.randomUUID
@@ -492,6 +494,7 @@
           const b = blocks.find((x) => x.id === id);
           if (!b) return;
           fn(b);
+          bumpBlocks();
           save();
           render();
         }
@@ -518,13 +521,12 @@
             $("#nowLabel").textContent = fmt(0).slice(1, -1);
           });
           ws.on("play", () => {
-            // Cancel any existing animation frame before starting a new one
             if (raf) {
               cancelAnimationFrame(raf);
               raf = 0;
             }
-            tick();
-            updatePlay();
+            updatePlay(); // icon flips immediately
+            tick();       // highlight work after
           });
           ws.on("pause", () => {
             // Stop the animation loop when paused
@@ -545,34 +547,61 @@
         function updatePlay() {
           $("#playBtn").textContent = ws && !ws.isPlaying() ? "▶" : "❚❚";
         }
+        function bumpBlocks() {
+          blocksVersion++;
+          stampedCache = null;
+        }
+        function getStamped() {
+          // Rebuilt lazily: only when blocks/timestamps actually change.
+          if (stampedCache === null) {
+            stampedCache = blocks.filter((b) => b.timestamp != null);
+          }
+          return stampedCache;
+        }
+        function highlight(id) {
+          // Class toggle instead of a full render(): the tick loop must never
+          // rebuild the whole lyrics list (that is what made playback janky).
+          if (id === activeId) return false;
+          const prev = document.querySelector(".block.active");
+          const next = document.querySelector(`.block[data-id="${id}"]`);
+          activeId = id;
+          if (prev) prev.classList.remove("active");
+          if (next) next.classList.add("active");
+          return true;
+        }
         function tick() {
           if (!ws || !ws.isPlaying()) return;
-          // Clear any previous frame to avoid multiple loops
           if (raf) {
             cancelAnimationFrame(raf);
             raf = 0;
           }
-          let t = getTime();
+          const t = getTime();
           $("#nowLabel").textContent = fmt(t).slice(1, -1);
-          let stamped = blocks.filter((b) => b.timestamp != null);
+
+          const stamped = blocks.filter((b) => b.timestamp != null);
           if (stamped.length) {
-            let activeBlock = null;
-            for (let i = blocks.length - 1; i >= 0; i--) {
-              const b = blocks[i];
-              if (b.timestamp !== null && b.timestamp <= t) {
-                activeBlock = b;
-                break;
+            // Closest stamped line (original behavior)
+            let closest = stamped[0];
+            let best = Math.abs(closest.timestamp - t);
+            for (let i = 1; i < stamped.length; i++) {
+              const d = Math.abs(stamped[i].timestamp - t);
+              if (d < best) {
+                best = d;
+                closest = stamped[i];
               }
             }
-            // If no block found, default to first block
-            if (!activeBlock && blocks.length) activeBlock = blocks[0];
-            if (activeBlock && activeBlock.id !== activeId) {
-              activeId = activeBlock.id;
-              render();
-              if (lastAutoId !== activeBlock.id) {
-                lastAutoId = activeBlock.id;
+            if (closest.id !== activeId) {
+              // Class toggle instead of full render
+              const prev = document.querySelector(".block.active");
+              const next = document.querySelector(`.block[data-id="${closest.id}"]`);
+              activeId = closest.id;
+              if (prev) prev.classList.remove("active");
+              if (next) next.classList.add("active");
+              // Auto-scroll
+              if (lastAutoId !== closest.id) {
+                lastAutoId = closest.id;
                 document
-                  .querySelector(`.block[data-id="${activeBlock.id}"]`)
+                  .querySelector(`.block[data-id="${closest.id}"]`)
                   ?.scrollIntoView({ block: "center", behavior: "smooth" });
               }
             }
@@ -634,6 +663,7 @@
               if (activeId === id)
                 activeId = blocks[Math.min(i, blocks.length - 1)]?.id || null;
             }
+            bumpBlocks();
             save();
             render();
             close();
@@ -791,6 +821,7 @@
             return;
           }
           blocks = makeBlocks($("#lyricsInput").value);
+          bumpBlocks();
           activeId = blocks[0]?.id || null;
           audioName = f.name;
           let r = new FileReader();
@@ -858,6 +889,7 @@
               timestamp: Number.isFinite(b.timestamp) ? b.timestamp : null,
             }));
             activeId = blocks[0]?.id || null;
+            bumpBlocks();
             $("#speedSlider").value = speed;
             $("#speedLabel").textContent = speed.toFixed(2) + "×";
             setScreen(true);
