@@ -404,6 +404,8 @@
           stampedCache = null,
           blocksVersion = 0,
           pinch = null;
+        let wasPlaying = false;
+        let pendingResume = false;
         const ids = () =>
           crypto.randomUUID
             ? crypto.randomUUID()
@@ -617,6 +619,11 @@
             ?.classList.add("flash");
         }
         function showSheet(id) {
+          // Pause audio if playing
+          wasPlaying = ws?.isPlaying() || false;
+          if (wasPlaying && ws) ws.pause();
+          pendingResume = false;
+
           $("#overlay").innerHTML =
             `<div class="sheet-backdrop"><div class="sheet"><div class="handle"></div>
             <button data-menu="edit">Edit Line</button>
@@ -627,48 +634,54 @@
             <button data-menu="movedown">Move Down</button>
             <button class="delete" data-menu="delete">Delete Line</button>
           </div></div>`;
-          const close = () => ($("#overlay").innerHTML = "");
+
+          const close = () => {
+            $("#overlay").innerHTML = "";
+            pendingResume = wasPlaying;
+            setTimeout(checkResume, 50);
+          };
+
           $(".sheet-backdrop").onclick = (e) => {
             if (e.target === e.currentTarget) close();
           };
-        $(".sheet").onclick = (e) => {
-          let action = e.target.dataset.menu;
-          if (!action) return;
-          if (action === "edit") {
-            close();
-            editText(id);
-          } else {
-            let i = blocks.findIndex((b) => b.id === id);
-            if (action === "above")
-              blocks.splice(i, 0, { id: ids(), text: "", timestamp: null });
-            else if (action === "below")
-              blocks.splice(i + 1, 0, { id: ids(), text: "", timestamp: null });
-            else if (action === "copy") {
-              let original = blocks[i];
-              blocks.splice(i + 1, 0, { id: ids(), text: original.text, timestamp: null });
-            } else if (action === "moveup") {
-              if (i > 0) {
-                let temp = blocks[i];
-                blocks[i] = blocks[i - 1];
-                blocks[i - 1] = temp;
+
+          $(".sheet").onclick = (e) => {
+            let action = e.target.dataset.menu;
+            if (!action) return;
+            if (action === "edit") {
+              close();
+              editText(id);
+            } else {
+              let i = blocks.findIndex((b) => b.id === id);
+              if (action === "above")
+                blocks.splice(i, 0, { id: ids(), text: "", timestamp: null });
+              else if (action === "below")
+                blocks.splice(i + 1, 0, { id: ids(), text: "", timestamp: null });
+              else if (action === "copy") {
+                let original = blocks[i];
+                blocks.splice(i + 1, 0, { id: ids(), text: original.text, timestamp: null });
+              } else if (action === "moveup") {
+                if (i > 0) {
+                  let temp = blocks[i];
+                  blocks[i] = blocks[i - 1];
+                  blocks[i - 1] = temp;
+                }
+              } else if (action === "movedown") {
+                if (i < blocks.length - 1) {
+                  let temp = blocks[i];
+                  blocks[i] = blocks[i + 1];
+                  blocks[i + 1] = temp;
+                }
+              } else if (action === "delete") {
+                blocks.splice(i, 1);
+                if (activeId === id)
+                  activeId = blocks[Math.min(i, blocks.length - 1)]?.id || null;
               }
-            } else if (action === "movedown") {
-              if (i < blocks.length - 1) {
-                let temp = blocks[i];
-                blocks[i] = blocks[i + 1];
-                blocks[i + 1] = temp;
-              }
-            } else if (action === "delete") {
-              blocks.splice(i, 1);
-              if (activeId === id)
-                activeId = blocks[Math.min(i, blocks.length - 1)]?.id || null;
+              save();
+              render();
+              close();
             }
-            bumpBlocks();
-            save();
-            render();
-            close();
-          }
-        };
+          };
         }
         function editText(id) {
           let b = blocks.find((x) => x.id === id);
@@ -678,14 +691,21 @@
           inp.focus();
           inp.select();
           $(".modal-backdrop").onclick = (e) => {
-            if (e.target === e.currentTarget) $("#overlay").innerHTML = "";
+            if (e.target === e.currentTarget) {
+              $("#overlay").innerHTML = "";
+              checkResume();
+            }
           };
           $("form.modal").onsubmit = (e) => {
             e.preventDefault();
             change(id, (x) => (x.text = inp.value));
             $("#overlay").innerHTML = "";
+            checkResume();
           };
-          $("[data-close]").onclick = () => ($("#overlay").innerHTML = "");
+          $("[data-close]").onclick = () => {
+            $("#overlay").innerHTML = "";
+            checkResume();
+          };
         }
         function editTime(id) {
           let b = blocks.find((x) => x.id === id),
@@ -710,6 +730,12 @@
             $("#overlay").innerHTML = "";
           };
           $("[data-close]").onclick = () => ($("#overlay").innerHTML = "");
+        }
+        function checkResume() {
+          if (pendingResume && ws && !ws.isPlaying() && $("#overlay").innerHTML === "") {
+            ws.play();
+            pendingResume = false;
+          }
         }
         $("#lyricsList").addEventListener("click", (e) => {
           let block = e.target.closest(".block");
