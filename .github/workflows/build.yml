@@ -26,6 +26,31 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      - name: Generate app icons
+        run: |
+          mkdir -p android/app/src/main/res
+          node -e "
+          const sharp = require('sharp');
+          const fs = require('fs');
+          const sizes = {
+            'mipmap-mdpi': 48,
+            'mipmap-hdpi': 72,
+            'mipmap-xhdpi': 96,
+            'mipmap-xxhdpi': 144,
+            'mipmap-xxxhdpi': 192
+          };
+          Object.entries(sizes).forEach(([folder, size]) => {
+            const dir = 'android/app/src/main/res/' + folder;
+            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+            sharp('assets/icon/icon-source.jpg')
+              .resize(size, size)
+              .toFile(dir + '/ic_launcher.png');
+            sharp('assets/icon/icon-source.jpg')
+              .resize(size, size)
+              .toFile(dir + '/ic_launcher_round.png');
+          });
+          "
+
       - name: Prepare www folder
         run: mkdir -p www
 
