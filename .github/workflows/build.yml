@@ -26,6 +26,24 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      - name: Prepare www folder
+        run: mkdir -p www
+
+      - name: Copy HTML to www
+        run: cp lyric_sync.html www/index.html
+
+      - name: Download WaveSurfer locally
+        run: curl -L -o www/wavesurfer.min.js https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/wavesurfer.min.js
+
+      - name: Patch HTML to use local WaveSurfer
+        run: sed -i 's|https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/wavesurfer.min.js|wavesurfer.min.js|g' www/index.html
+
+      - name: Init Capacitor
+        run: npx cap init LyricSync com.msadrashakouri.lyricsync
+
+      - name: Add Android platform
+        run: npx cap add android
+
       - name: Generate app icons
         run: |
           mkdir -p android/app/src/main/res
@@ -50,24 +68,6 @@ jobs:
               .toFile(dir + '/ic_launcher_round.png');
           });
           "
-
-      - name: Prepare www folder
-        run: mkdir -p www
-
-      - name: Copy HTML to www
-        run: cp lyric_sync.html www/index.html
-
-      - name: Download WaveSurfer locally
-        run: curl -L -o www/wavesurfer.min.js https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/wavesurfer.min.js
-
-      - name: Patch HTML to use local WaveSurfer
-        run: sed -i 's|https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/wavesurfer.min.js|wavesurfer.min.js|g' www/index.html
-
-      - name: Init Capacitor
-        run: npx cap init LyricSync com.msadrashakouri.lyricsync
-
-      - name: Add Android platform
-        run: npx cap add android
 
       - name: Copy assets to Android
         run: npx cap copy
