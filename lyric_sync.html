@@ -111,6 +111,14 @@
         padding: 14px;
         font-size: 17px;
       }
+      .primary.danger {
+        background: #b3261e;
+        color: #fff;
+      }
+      .modal p {
+        margin: 0;
+        color: var(--muted);
+      }
       .notice {
         color: #ffd477;
         min-height: 1.3em;
@@ -403,6 +411,7 @@
           lastAutoId = null,
           stampedCache = null,
           blocksVersion = 0,
+          syncHistoryPushed = false,
           pinch = null;
         let wasPlaying = false;
         let pendingResume = false;
@@ -434,6 +443,13 @@
         function setScreen(sync) {
           $("#startScreen").classList.toggle("hidden", sync);
           $("#syncScreen").classList.toggle("hidden", !sync);
+          if (sync) {
+            // Web only: put a dummy history entry in place so the browser
+            // back button can be intercepted instead of navigating away.
+            if (!isNative && !syncHistoryPushed) pushSyncHistory();
+          } else {
+            syncHistoryPushed = false;
+          }
         }
         function makeBlocks(text) {
           const lines = text.split("\n");
@@ -862,6 +878,169 @@
           };
           r.readAsDataURL(f);
         };
+        // ============== Back-button confirmation (app + web) ==============
+        // Capacitor 6 bridge injects a method-only proxy per installed
+        // plugin at window.Capacitor.Plugins.<Name> — never destructure
+        // enums from it (see export fix). The App plugin's proxy provides
+        // addListener() and exitApp().
+        const isNative = !!(
+          window.Capacitor &&
+          window.Capacitor.Plugins &&
+          window.Capacitor.Plugins.App
+        );
+
+        function closeOverlay() {
+          const overlay = $("#overlay");
+          if (overlay.innerHTML.trim() === "") return;
+          // If the back button closes the "..." menu directly, mirror the
+          // sheet's own close() so audio paused by the menu resumes instead
+          // of staying paused forever (b633e02 pause-on-menu feature).
+          if (overlay.innerHTML.includes("sheet-backdrop")) {
+            pendingResume = wasPlaying;
+          }
+          overlay.innerHTML = "";
+          checkResume();
+        }
+        function pushSyncHistory() {
+          try {
+            history.pushState({ lyricSync: true }, "");
+            syncHistoryPushed = true;
+          } catch (e) {
+            // Some browsers forbid pushState on file:// origins.
+          }
+        }
+        function showConfirmDialog(
+          title,
+          message,
+          confirmLabel,
+          isDestructive,
+          onConfirm,
+        ) {
+          const overlay = $("#overlay");
+          overlay.innerHTML =
+            `<div class="modal-backdrop">
+              <div class="modal">
+                <strong>${escapeHTML(title)}</strong>
+                <p>${escapeHTML(message)}</p>
+                <div class="modal-actions">
+                  <button type="button" data-close>Cancel</button>
+                  <button type="button" class="primary${
+                    isDestructive ? " danger" : ""
+                  }" data-confirm>${escapeHTML(confirmLabel)}</button>
+                </div>
+              </div>
+            </div>`;
+          const backdrop = overlay.querySelector(".modal-backdrop");
+          backdrop.onclick = (e) => {
+            if (e.target === e.currentTarget) closeOverlay();
+          };
+          overlay.querySelector("[data-close]").onclick = closeOverlay;
+          overlay.querySelector("[data-confirm]").onclick = () => {
+            closeOverlay();
+            if (typeof onConfirm === "function") onConfirm();
+          };
+          return overlay;
+        }
+        function saveTimestampsToInput() {
+          // Serialize the current blocks back into the lyrics textarea.
+          // makeBlocks() parses [mm:ss.cc] timestamps on the next start,
+          // so no synced work is lost when returning to the main screen.
+          $("#lyricsInput").value = blocks
+            .map((b) =>
+              b.timestamp != null ? fmt(b.timestamp) + " " + b.text : b.text,
+            )
+            .join("\n");
+        }
+        function returnToMain() {
+          ws?.pause();
+          saveTimestampsToInput();
+          wasPlaying = false;
+          pendingResume = false;
+          setScreen(false);
+        }
+        function handleBack() {
+          // Native (Android) hardware back button.
+          const overlay = $("#overlay");
+          if (overlay && overlay.innerHTML.trim() !== "") {
+            closeOverlay(); // sheet / edit modal / dialog: back acts as Cancel
+            return;
+          }
+          const onSync = !$("#syncScreen").classList.contains("hidden");
+          if (onSync) {
+            showConfirmDialog(
+              "Return to main?",
+              "Your progress will be saved.",
+              "Return",
+              false,
+              returnToMain,
+            );
+          } else {
+            showConfirmDialog(
+              "Exit?",
+              "Are you sure you want to exit?",
+              "Exit",
+              true,
+              () => {
+                const app =
+                  window.Capacitor &&
+                  window.Capacitor.Plugins &&
+                  window.Capacitor.Plugins.App;
+                if (app && typeof app.exitApp === "function") {
+                  try {
+                    app.exitApp();
+                  } catch (e) {}
+                }
+              },
+            );
+          }
+        }
+        function handlePopState() {
+          // Web browser back button.
+          if (isNative) return;
+          const overlay = $("#overlay");
+          const onSync = !$("#syncScreen").classList.contains("hidden");
+          if (overlay && overlay.innerHTML.trim() !== "") {
+            closeOverlay(); // back while dialog open = Cancel
+            if (onSync) pushSyncHistory(); // keep one dummy so back still works
+            return;
+          }
+          if (!onSync) return; // start screen: let the browser navigate away
+          showConfirmDialog(
+            "Return to main?",
+            "Your progress will be saved.",
+            "Return",
+            false,
+            () => {
+              returnToMain();
+              // This popstate already consumed the previous dummy, and a
+              // fresh one was pushed when the dialog opened. Pop that one
+              // so history is clean — it is a same-document entry, so no
+              // real navigation happens.
+              try {
+                history.back();
+              } catch (e) {}
+            },
+          );
+          pushSyncHistory(); // guard the real entry while the dialog is open
+        }
+        function registerBackHandling() {
+          const app =
+            window.Capacitor &&
+            window.Capacitor.Plugins &&
+            window.Capacitor.Plugins.App;
+          if (app && typeof app.addListener === "function") {
+            app.addListener("backButton", handleBack);
+            return;
+          }
+          if (!isNative) {
+            window.addEventListener("popstate", handlePopState);
+            return;
+          }
+          console.warn(
+            "Capacitor App plugin found but addListener missing; back button not intercepted",
+          );
+        }
+
         function addPinch() {
           let el = $("#waveform");
           el.addEventListener(
@@ -925,6 +1104,7 @@
         } catch (e) {
           console.warn("No usable saved session", e);
         }
+        registerBackHandling();
       })();
     </script>
   </body>
