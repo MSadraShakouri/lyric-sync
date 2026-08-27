@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
@@ -36,6 +36,23 @@ jobs:
       # the service worker cache name from package.json.
       - name: Prepare PWA site
         run: node scripts/prepare-www.js
+
+      # One-time self-configuration: this repo's Pages source must be set to
+      # GitHub Actions (branch "gh-pages") for deploy-pages to work. If it
+      # isn't, set it here — no manual Settings click required.
+      - name: Ensure Pages source is GitHub Actions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          current=$(gh api repos/"$GITHUB_REPOSITORY"/pages --jq '.source.branch' 2>/dev/null || true)
+          if [ "$current" != "gh-pages" ]; then
+            echo "Pages source is '${current:-not configured}'; setting it to GitHub Actions."
+            gh api --method PATCH repos/"$GITHUB_REPOSITORY"/pages \
+              -f "source[branch]=gh-pages" -f "source[path]=/"
+            sleep 5
+          else
+            echo "Pages source already GitHub Actions."
+          fi
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
