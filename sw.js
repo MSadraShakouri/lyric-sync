@@ -2,7 +2,7 @@
    The CACHE name is bumped automatically from package.json by
    scripts/prepare-www.js (APK build) and the GitHub Pages workflow,
    so every release invalidates the offline cache. */
-const CACHE = "lyric-sync-v1.3.0";
+const CACHE = "lyric-sync-v1.3.1";
 const CORE = [
   "./",
   "./index.html",

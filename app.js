@@ -574,7 +574,8 @@
             `<div class="modal-backdrop"><form class="modal"><strong>Edit line</strong><input id="editLine" dir="auto" value="${escapeHTML(b.text)}" autocomplete="off"><div class="modal-actions"><button type="button" data-close>Cancel</button><button class="primary">Save</button></div></form></div>`;
           let inp = $("#editLine");
           inp.focus();
-          inp.select();
+          // Caret at the end — selecting the whole line fights the edit.
+          inp.setSelectionRange(inp.value.length, inp.value.length);
           $(".modal-backdrop").onclick = (e) => {
             if (e.target === e.currentTarget) {
               $("#overlay").innerHTML = "";
