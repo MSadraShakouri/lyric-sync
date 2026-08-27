@@ -128,6 +128,7 @@
         display: grid;
         grid-template-rows: 30dvh 60dvh 10dvh;
         min-height: 100dvh;
+        position: relative;
       }
       .wave-area {
         position: relative;
@@ -180,6 +181,10 @@
         background: #17313a;
         box-shadow: inset 4px 0 var(--accent);
       }
+      .block.selected {
+        background: #2b2542;
+        box-shadow: inset 4px 0 #a78bfa;
+      }
       .left {
         width: 83px;
         flex: none;
@@ -204,6 +209,9 @@
         overflow-wrap: anywhere;
         align-self: center;
         cursor: pointer;
+        user-select: none;
+        -webkit-user-select: none;
+        -webkit-touch-callout: none;
       }
       .line.empty:before {
         content: "Blank line";
@@ -344,6 +352,80 @@
           background: #4c7b88;
         }
       }
+      /* selection action bar */
+      .wave-left {
+        display: flex;
+        gap: 8px;
+        align-items: baseline;
+        min-width: 0;
+      }
+      #songLabel {
+        max-width: 40%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      #selbar {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        z-index: 10;
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 6px;
+        padding: 8px;
+        background: #2a2a2a;
+        border-bottom: 1px solid #4a4a4a;
+      }
+      #selbar .count {
+        margin-right: auto;
+        color: var(--muted);
+        font-size: 13px;
+        white-space: nowrap;
+      }
+      #selbar button {
+        padding: 8px 10px;
+        font-size: 13px;
+      }
+      #selbar button.danger {
+        color: var(--danger);
+      }
+      /* toast */
+      .toast {
+        position: fixed;
+        left: 50%;
+        bottom: 72px;
+        transform: translateX(-50%) translateY(6px);
+        background: #3d3d3d;
+        color: var(--ink);
+        padding: 9px 14px;
+        border-radius: 9px;
+        font-size: 13px;
+        opacity: 0;
+        transition:
+          opacity 0.25s,
+          transform 0.25s;
+        z-index: 40;
+        pointer-events: none;
+        max-width: 80vw;
+        text-align: center;
+      }
+      .toast.show {
+        opacity: 1;
+        transform: translateX(-50%);
+      }
+      /* modals with forms */
+      .modal label {
+        display: grid;
+        gap: 4px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .modal textarea {
+        min-height: 110px;
+      }
     </style>
   </head>
   <body>
@@ -351,7 +433,8 @@
       <h1>Lyric Sync</h1>
       <p class="hint">
         Everything stays on this device. Add audio and lyrics, then stamp each
-        line as it plays.
+        line as it plays. Long-press a line in the editor to select several at
+        once.
       </p>
       <label class="field upload"
         >Audio file
@@ -371,9 +454,20 @@
       <button id="beginBtn" class="primary">Start syncing</button>
     </section>
     <section id="syncScreen" class="screen hidden">
+      <div id="selbar" class="hidden">
+        <span class="count" id="selCount">0 selected</span
+        ><button id="selCopy">Copy</button
+        ><button id="selCut">Cut</button
+        ><button id="selPaste" class="hidden">Paste after</button
+        ><button id="selDelete" class="danger">Delete</button
+        ><button id="selCancel" aria-label="Cancel selection">✕</button>
+      </div>
       <div class="wave-area">
         <div class="wave-toolbar">
-          <span id="nowLabel">00:00.00</span><span>Pinch to zoom</span>
+          <span class="wave-left"
+            ><span id="songLabel"></span
+            ><span id="nowLabel">00:00.00</span></span
+          ><span>Pinch to zoom</span>
         </div>
         <div id="waveform"></div>
       </div>
@@ -415,6 +509,15 @@
           pinch = null;
         let wasPlaying = false;
         let pendingResume = false;
+        // multi-select + internal text clipboard (no timestamps)
+        let selMode = false;
+        const selIds = new Set();
+        let clip = [];
+        let suppressClick = 0;
+        function defaultMeta() {
+          return { ti: "", ar: "", al: "", au: "", by: "" };
+        }
+        let meta = defaultMeta();
         const ids = () =>
           crypto.randomUUID
             ? crypto.randomUUID()
@@ -432,7 +535,14 @@
           try {
             localStorage.setItem(
               storeKey,
-              JSON.stringify({ audioName, audioData, blocks, speed, zoom }),
+              JSON.stringify({
+              audioName,
+              audioData,
+              blocks,
+              speed,
+              zoom,
+              meta,
+            }),
             );
           } catch (e) {
             console.warn(e);
@@ -451,32 +561,86 @@
             syncHistoryPushed = false;
           }
         }
-        function makeBlocks(text) {
-          const lines = text.split("\n");
+        /* Parses plain lyrics or an existing LRC file into blocks.
+           Handles: header tags [ti]/[ar]/[al]/[au]/[by], [offset:],
+           condensed multi-timestamp lines, 2- and 3-digit milliseconds,
+           CRLF line endings. Fully-stamped input is sorted by time. */
+        const TS_RE = /^\[(\d{2}):(\d{2})[.:](\d{2,3})\]/;
+        const TAG_RE = /^\[\s*(ti|ar|al|au|by)\s*:\s*([^\]]*)\s*\]$/i;
+        const OFFSET_RE = /^\[\s*offset\s*:\s*(-?\d+)\s*\]$/i;
+        const TAG_ANY_RE = /^\[[a-zA-Z][a-zA-Z0-9]*\s*:[^\]]*\]$/;
+        function parseLrc(text) {
+          if (!text.trim()) return { blocks: [], meta: defaultMeta() };
+          const lines = text.replace(/\r\n?/g, "\n").split("\n");
           const result = [];
-          const timestampRegex = /^\[(\d{2}):(\d{2})\.(\d{2})\]\s*(.*)/;
-          for (const line of lines) {
-            const match = line.match(timestampRegex);
-            if (match) {
-              const minutes = parseInt(match[1], 10);
-              const seconds = parseInt(match[2], 10);
-              const centiseconds = parseInt(match[3], 10);
-              const ms = (minutes * 60 + seconds) * 1000 + centiseconds * 10;
-              const text = match[4];
-              result.push({ id: ids(), text, timestamp: ms });
+          const m = defaultMeta();
+          let offset = 0;
+          for (const raw of lines) {
+            const line = raw.trim();
+            const tag = line.match(TAG_RE);
+            if (tag) {
+              m[tag[1].toLowerCase()] = tag[2].trim();
+              continue;
+            }
+            const off = line.match(OFFSET_RE);
+            if (off) {
+              offset += parseInt(off[1], 10);
+              continue;
+            }
+            // Strip (possibly several) leading timestamps
+            let rest = line;
+            let count = 0;
+            let stripped = false;
+            for (;;) {
+              const t = rest.match(TS_RE);
+              if (!t) break;
+              const sec = parseInt(t[2], 10);
+              if (sec >= 60) {
+                rest = rest.slice(t[0].length); // invalid stamp; drop it
+                stripped = true;
+                continue;
+              }
+              const msDigits = t[3];
+              const ms =
+                (parseInt(t[1], 10) * 60 + sec) * 1000 +
+                (msDigits.length === 3
+                  ? parseInt(msDigits, 10)
+                  : parseInt(msDigits, 10) * 10);
+              result.push({ id: ids(), text: null, timestamp: ms });
+              rest = rest.slice(t[0].length);
+              count++;
+            }
+            if (count > 0) {
+              const txt = rest.trim();
+              for (let i = result.length - count; i < result.length; i++)
+                result[i].text = txt;
+            } else if (TAG_ANY_RE.test(line)) {
+              // Unknown tag line ([re:], [ve:], ...) — not a lyric
             } else {
-              // No timestamp – keep line as is
-              result.push({ id: ids(), text: line, timestamp: null });
+              // No timestamp – keep line as is (unless a bad stamp was stripped)
+              result.push({ id: ids(), text: stripped ? rest.trim() : raw, timestamp: null });
             }
           }
-          return result;
+          if (offset !== 0)
+            for (const b of result)
+              if (b.timestamp != null)
+                b.timestamp = Math.max(0, b.timestamp + offset);
+          if (
+            result.length > 0 &&
+            result.every((b) => b.timestamp != null)
+          )
+            result.sort((a, b) => a.timestamp - b.timestamp);
+          return { blocks: result, meta: m };
         }
         function render() {
           const list = $("#lyricsList");
           list.innerHTML = "";
           blocks.forEach((b, i) => {
             const el = document.createElement("article");
-            el.className = "block" + (b.id === activeId ? " active" : "");
+            el.className =
+              "block" +
+              (b.id === activeId ? " active" : "") +
+              (selMode && selIds.has(b.id) ? " selected" : "");
             el.dataset.id = b.id;
             el.innerHTML = `<div class="left"><button class="nudge" data-act="plus">+0.1</button><button class="stamp-time" data-act="time">${fmt(b.timestamp)}</button><button class="nudge" data-act="minus">−0.1</button></div><div class="line ${b.text === "" ? "empty" : ""}" data-act="select" dir="auto">${escapeHTML(b.text)}</div><div class="right"><button class="icon" data-act="from" aria-label="Play from here">▶</button><button class="stamp" data-act="stamp">STAMP</button><button class="icon" data-act="more" aria-label="More options">⋯</button></div>`;
             list.append(el);
@@ -517,6 +681,12 @@
           render();
         }
         function waveInit(data) {
+          if (typeof WaveSurfer === "undefined") {
+            $("#startNotice").textContent =
+              "The waveform library could not be loaded. Check your connection and reload the page.";
+            setScreen(false);
+            return;
+          }
           if (ws) ws.destroy();
           ws = WaveSurfer.create({
             container: "#waveform",
@@ -640,15 +810,19 @@
           if (wasPlaying && ws) ws.pause();
           pendingResume = false;
 
+          const b = blocks.find((x) => x.id === id);
+          const hasTime = b?.timestamp != null;
           $("#overlay").innerHTML =
             `<div class="sheet-backdrop"><div class="sheet"><div class="handle"></div>
-            <button data-menu="edit">Edit Line</button>
-            <button data-menu="above">Insert Above</button>
-            <button data-menu="below">Insert Below</button>
-            <button data-menu="copy">Copy Below</button>
-            <button data-menu="moveup">Move Up</button>
-            <button data-menu="movedown">Move Down</button>
-            <button class="delete" data-menu="delete">Delete Line</button>
+            <button data-menu="edit">Edit line</button>
+            <button data-menu="insertbelow">Insert lines below</button>
+            ${clip.length ? '<button data-menu="paste">Paste below</button>' : ""}
+            <button data-menu="copy">Copy</button>
+            <button data-menu="cut">Cut</button>
+            ${hasTime ? '<button data-menu="cleartime">Clear time</button>' : ""}
+            <button data-menu="moveup">Move up</button>
+            <button data-menu="movedown">Move down</button>
+            <button class="delete" data-menu="delete">Delete line</button>
           </div></div>`;
 
           const close = () => {
@@ -667,15 +841,33 @@
             if (action === "edit") {
               close();
               editText(id);
+            } else if (action === "insertbelow") {
+              close();
+              insertLinesBelow(id);
             } else {
-              let i = blocks.findIndex((b) => b.id === id);
-              if (action === "above")
-                blocks.splice(i, 0, { id: ids(), text: "", timestamp: null });
-              else if (action === "below")
-                blocks.splice(i + 1, 0, { id: ids(), text: "", timestamp: null });
-              else if (action === "copy") {
-                let original = blocks[i];
-                blocks.splice(i + 1, 0, { id: ids(), text: original.text, timestamp: null });
+              let i = blocks.findIndex((x) => x.id === id);
+              if (action === "paste") {
+                blocks.splice(
+                  i + 1,
+                  0,
+                  ...clip.map((t) => ({ id: ids(), text: t, timestamp: null })),
+                );
+                toast(
+                  "Pasted " + clip.length + (clip.length === 1 ? " line" : " lines"),
+                );
+              } else if (action === "copy") {
+                clip = [b.text];
+                toast("Copied 1 line");
+              } else if (action === "cut") {
+                clip = [b.text];
+                blocks.splice(i, 1);
+                if (activeId === id)
+                  activeId =
+                    blocks[Math.min(i, blocks.length - 1)]?.id || null;
+                toast("Cut 1 line");
+              } else if (action === "cleartime") {
+                blocks[i].timestamp = null;
+                toast("Time cleared");
               } else if (action === "moveup") {
                 if (i > 0) {
                   let temp = blocks[i];
@@ -691,13 +883,156 @@
               } else if (action === "delete") {
                 blocks.splice(i, 1);
                 if (activeId === id)
-                  activeId = blocks[Math.min(i, blocks.length - 1)]?.id || null;
+                  activeId =
+                    blocks[Math.min(i, blocks.length - 1)]?.id || null;
+                toast("Line deleted");
               }
+              bumpBlocks();
               save();
               render();
               close();
             }
           };
+        }
+        function insertLinesBelow(id) {
+          const i = blocks.findIndex((x) => x.id === id);
+          $("#overlay").innerHTML =
+            `<div class="modal-backdrop"><form class="modal"><strong>Insert lines below</strong><textarea id="insertArea" dir="auto" placeholder="One line per block"></textarea><div class="modal-actions"><button type="button" data-close>Cancel</button><button class="primary">Insert</button></div></form></div>`;
+          const ta = $("#insertArea");
+          ta.focus();
+          const close = () => {
+            $("#overlay").innerHTML = "";
+            checkResume();
+          };
+          $(".modal-backdrop").onclick = (e) => {
+            if (e.target === e.currentTarget) close();
+          };
+          $("form.modal").onsubmit = (e) => {
+            e.preventDefault();
+            let lines = ta.value.split("\n").map((s) => s.trim());
+            while (lines.length && lines[0] === "") lines.shift();
+            while (lines.length && lines[lines.length - 1] === "") lines.pop();
+            if (lines.length) {
+              blocks.splice(
+                i + 1,
+                0,
+                ...lines.map((t) => ({ id: ids(), text: t, timestamp: null })),
+              );
+              bumpBlocks();
+              save();
+              render();
+            }
+            close();
+          };
+          $("[data-close]").onclick = close;
+        }
+        /* ============== Multi-select (long-press) ============== */
+        function enterSelMode() {
+          if (selMode) return;
+          selMode = true;
+          selIds.clear();
+          $("#selbar").classList.remove("hidden");
+          render();
+        }
+        function exitSelMode() {
+          if (!selMode) return;
+          selMode = false;
+          selIds.clear();
+          $("#selbar").classList.add("hidden");
+          render();
+        }
+        function updateSelbar() {
+          $("#selCount").textContent = selIds.size + " selected";
+          $("#selPaste").classList.toggle("hidden", clip.length === 0);
+        }
+        function selectedBlocks() {
+          return blocks.filter((b) => selIds.has(b.id));
+        }
+        function doCopy() {
+          const sel = selectedBlocks();
+          if (!sel.length) return;
+          clip = sel.map((b) => b.text); // text only, no timestamps
+          toast(
+            "Copied " + sel.length + (sel.length === 1 ? " line" : " lines"),
+          );
+          exitSelMode();
+        }
+        function doCut() {
+          const sel = selectedBlocks();
+          if (!sel.length) return;
+          clip = sel.map((b) => b.text);
+          const n = sel.length;
+          blocks = blocks.filter((b) => !selIds.has(b.id));
+          if (activeId && selIds.has(activeId))
+            activeId = blocks[0]?.id || null;
+          bumpBlocks();
+          save();
+          toast("Cut " + n + (n === 1 ? " line" : " lines"));
+          exitSelMode();
+        }
+        function doDeleteSel() {
+          const n = selIds.size;
+          if (!n) return;
+          blocks = blocks.filter((b) => !selIds.has(b.id));
+          if (activeId && selIds.has(activeId))
+            activeId = blocks[0]?.id || null;
+          bumpBlocks();
+          save();
+          toast("Deleted " + n + (n === 1 ? " line" : " lines"));
+          exitSelMode();
+        }
+        function pasteAfterSelected() {
+          const idxs = blocks
+            .map((b, i) => (selIds.has(b.id) ? i : -1))
+            .filter((i) => i >= 0);
+          if (!idxs.length) return;
+          const at = Math.max(...idxs) + 1;
+          blocks.splice(
+            at,
+            0,
+            ...clip.map((t) => ({ id: ids(), text: t, timestamp: null })),
+          );
+          bumpBlocks();
+          save();
+          toast("Pasted " + clip.length + (clip.length === 1 ? " line" : " lines"));
+          exitSelMode();
+        }
+        /* ============== Toast + clipboard helpers ============== */
+        let toastTimer = 0;
+        function toast(msg) {
+          let t = document.querySelector(".toast");
+          if (!t) {
+            t = document.createElement("div");
+            t.className = "toast";
+            document.body.appendChild(t);
+          }
+          t.textContent = msg;
+          requestAnimationFrame(() => t.classList.add("show"));
+          clearTimeout(toastTimer);
+          toastTimer = setTimeout(() => t.classList.remove("show"), 1500);
+        }
+        async function copyText(text) {
+          try {
+            await navigator.clipboard.writeText(text);
+            return true;
+          } catch (e) {
+            try {
+              const ta = document.createElement("textarea");
+              ta.value = text;
+              ta.style.position = "fixed";
+              ta.style.opacity = "0";
+              document.body.appendChild(ta);
+              ta.select();
+              const ok = document.execCommand("copy");
+              ta.remove();
+              return ok;
+            } catch (e2) {
+              return false;
+            }
+          }
+        }
+        function setSongLabel() {
+          $("#songLabel").textContent = audioName || "";
         }
         function editText(id) {
           let b = blocks.find((x) => x.id === id);
@@ -754,6 +1089,22 @@
           }
         }
         $("#lyricsList").addEventListener("click", (e) => {
+          if (Date.now() < suppressClick) return;
+          if (selMode) {
+            // In selection mode a tap toggles the block's selection
+            const block = e.target.closest(".block");
+            if (!block) return;
+            const bid = block.dataset.id;
+            if (selIds.has(bid)) selIds.delete(bid);
+            else selIds.add(bid);
+            if (selIds.size === 0) {
+              exitSelMode();
+              return;
+            }
+            updateSelbar();
+            render();
+            return;
+          }
           let block = e.target.closest(".block");
           if (!block) return;
           let id = block.dataset.id,
@@ -781,6 +1132,54 @@
           } else if (act === "more") showSheet(id);
           else if (act === "select") select(id, true, false);
         });
+        /* Long-press on a line enters multi-select mode; tap to toggle. */
+        let lpTimer = 0,
+          lpId = null;
+        (() => {
+          const list = $("#lyricsList");
+          list.addEventListener("pointerdown", (e) => {
+            if (e.pointerType === "mouse" && e.button !== 0) return;
+            const block = e.target.closest(".block");
+            if (!block || e.target.closest("button")) return;
+            lpId = block.dataset.id;
+            const x0 = e.clientX,
+              y0 = e.clientY;
+            clearTimeout(lpTimer);
+            lpTimer = setTimeout(() => {
+              lpTimer = 0;
+              if (!selMode) enterSelMode();
+              if (lpId && !selIds.has(lpId)) selIds.add(lpId);
+              updateSelbar();
+              render();
+              suppressClick = Date.now() + 600;
+              try {
+                navigator.vibrate && navigator.vibrate(15);
+              } catch (err) {}
+            }, 450);
+            const onMove = (ev) => {
+              if (lpTimer && Math.hypot(ev.clientX - x0, ev.clientY - y0) > 12) {
+                clearTimeout(lpTimer);
+                lpTimer = 0;
+              }
+            };
+            const onEnd = () => {
+              clearTimeout(lpTimer);
+              lpTimer = 0;
+              list.removeEventListener("pointermove", onMove);
+              list.removeEventListener("pointerup", onEnd);
+              list.removeEventListener("pointercancel", onEnd);
+            };
+            list.addEventListener("pointermove", onMove);
+            list.addEventListener("pointerup", onEnd);
+            list.addEventListener("pointercancel", onEnd);
+          });
+        })();
+        $("#selCopy").onclick = () => doCopy();
+        $("#selCut").onclick = () => doCut();
+        $("#selDelete").onclick = () => doDeleteSel();
+        $("#selPaste").onclick = () => pasteAfterSelected();
+        $("#selCancel").onclick = () => exitSelMode();
+
         $("#playBtn").onclick = () => ws?.playPause();
         $("#back2").onclick = () =>
           ws && ws.setTime(Math.max(0, ws.getCurrentTime() - 2));
@@ -794,21 +1193,78 @@
           if (ws) ws.zoom(zoom);
           save();
         };
-        $("#exportBtn").onclick = async () => {
-          const content = blocks
-            .filter((b) => b.timestamp != null)
-            .map((b) => fmt(b.timestamp) + " " + b.text)
+        $("#exportBtn").onclick = () => showExportDialog();
+        /* Builds the LRC file content: metadata header (only filled fields)
+           + stamped lines sorted by time. Empty lyrics become a space so
+           picky players don't drop the line. */
+        function buildLrc(m) {
+          const stamped = getStamped().slice().sort((a, b) => a.timestamp - b.timestamp);
+          if (!stamped.length) return "";
+          const header = [];
+          const add = (tag, v) => {
+            v = (v || "").trim();
+            if (v) header.push("[" + tag + ": " + v + "]");
+          };
+          add("ti", m.ti);
+          add("ar", m.ar);
+          add("al", m.al);
+          add("au", m.au);
+          add("by", m.by);
+          const body = stamped
+            .map((b) => fmt(b.timestamp) + " " + (b.text === "" ? " " : b.text))
             .join("\n");
-
-          if (!content) {
-            alert("No timestamps to export.");
+          return (header.length ? header.join("\n") + "\n\n" : "") + body;
+        }
+        function readExportMeta() {
+          const g = (s) => (s ? $("#" + s).value : "");
+          return {
+            ti: g("exTi"),
+            ar: g("exAr"),
+            al: g("exAl"),
+            au: g("exAu"),
+            by: g("exBy"),
+          };
+        }
+        function showExportDialog() {
+          if (!getStamped().length) {
+            toast("No timestamps to export.");
             return;
           }
-
+          const defaultTitle = (audioName || "lyrics").replace(/\.[^.]+$/, "");
+          $("#overlay").innerHTML =
+            `<div class="modal-backdrop"><form class="modal" id="exportForm">
+            <strong>Export .lrc</strong>
+            <label>Title<input id="exTi" dir="auto" value="${escapeHTML(meta.ti || defaultTitle)}"></label>
+            <label>Artist<input id="exAr" dir="auto" value="${escapeHTML(meta.ar)}"></label>
+            <label>Album<input id="exAl" dir="auto" value="${escapeHTML(meta.al)}"></label>
+            <label>Composer<input id="exAu" dir="auto" value="${escapeHTML(meta.au)}"></label>
+            <label>Creator<input id="exBy" dir="auto" value="${escapeHTML(meta.by)}"></label>
+            <div class="modal-actions">
+              <button type="button" data-close>Cancel</button>
+              <button type="button" id="exCopy">Copy</button>
+              <button type="submit" class="primary">Save</button>
+            </div>
+          </form></div>`;
+          $("#overlay .modal-backdrop").onclick = (e) => {
+            if (e.target === e.currentTarget) closeOverlay();
+          };
+          $("#exportForm [data-close]").onclick = closeOverlay;
+          $("#exCopy").onclick = async () => {
+            const ok = await copyText(buildLrc(readExportMeta()));
+            toast(ok ? "LRC copied to clipboard" : "Copy failed");
+          };
+          $("#exportForm").onsubmit = (e) => {
+            e.preventDefault();
+            const content = buildLrc(readExportMeta());
+            closeOverlay();
+            doExportSave(content);
+          };
+        }
+        async function doExportSave(content) {
           const plugins = (window.Capacitor && window.Capacitor.Plugins) || {};
           const Filesystem = plugins.Filesystem;
+          const fileName = (audioName || "lyrics").replace(/\.[^.]+$/, "") + ".lrc";
           if (Filesystem && typeof Filesystem.writeFile === "function") {
-            const fileName = (audioName || "lyrics").replace(/\.[^.]+$/, "") + ".lrc";
             try {
               await Filesystem.writeFile({
                 path: fileName,
@@ -829,22 +1285,23 @@
                   dialogTitle: "Share LRC file",
                 });
               } else {
-                alert("File saved to app folder. (Share plugin not available)");
+                toast("File saved to app folder. (Share plugin not available)");
               }
             } catch (err) {
-              alert("Export failed: " + (err && err.message ? err.message : err));
+              toast("Export failed: " + (err && err.message ? err.message : err));
             }
           } else {
             // Fallback for web (original download approach)
             const a = document.createElement("a");
             a.href = URL.createObjectURL(
-              new Blob([content], { type: "text/plain;charset=utf-8" })
+              new Blob([content], { type: "text/plain;charset=utf-8" }),
             );
-            a.download = (audioName || "lyrics").replace(/\.[^.]+$/, "") + ".lrc";
+            a.download = fileName;
             a.click();
             setTimeout(() => URL.revokeObjectURL(a.href), 500);
+            toast("Downloaded " + fileName);
           }
-        };
+        }
         $("#textInput").onchange = (e) => {
           let f = e.target.files[0];
           if (!f) return;
@@ -862,7 +1319,13 @@
             $("#startNotice").textContent = "Choose an audio file first.";
             return;
           }
-          blocks = makeBlocks($("#lyricsInput").value);
+          const parsed = parseLrc($("#lyricsInput").value);
+          if (!parsed.blocks.length) {
+            $("#startNotice").textContent = "Add some lyrics first.";
+            return;
+          }
+          blocks = parsed.blocks;
+          meta = parsed.meta;
           bumpBlocks();
           activeId = blocks[0]?.id || null;
           audioName = f.name;
@@ -875,6 +1338,7 @@
             setScreen(true);
             waveInit(audioData);
             render();
+            setSongLabel();
           };
           r.readAsDataURL(f);
         };
@@ -943,13 +1407,25 @@
         }
         function saveTimestampsToInput() {
           // Serialize the current blocks back into the lyrics textarea.
-          // makeBlocks() parses [mm:ss.cc] timestamps on the next start,
-          // so no synced work is lost when returning to the main screen.
-          $("#lyricsInput").value = blocks
+          // parseLrc() re-parses timestamps (and header tags) on the next
+          // start, so no synced work is lost when returning to the main screen.
+          const header = [];
+          const add = (tag, v) => {
+            v = (v || "").trim();
+            if (v) header.push("[" + tag + ": " + v + "]");
+          };
+          add("ti", meta.ti);
+          add("ar", meta.ar);
+          add("al", meta.al);
+          add("au", meta.au);
+          add("by", meta.by);
+          const body = blocks
             .map((b) =>
               b.timestamp != null ? fmt(b.timestamp) + " " + b.text : b.text,
             )
             .join("\n");
+          $("#lyricsInput").value =
+            (header.length ? header.join("\n") + "\n" : "") + body;
         }
         function returnToMain() {
           ws?.pause();
@@ -960,6 +1436,10 @@
         }
         function handleBack() {
           // Native (Android) hardware back button.
+          if (selMode) {
+            exitSelMode();
+            return;
+          }
           const overlay = $("#overlay");
           if (overlay && overlay.innerHTML.trim() !== "") {
             closeOverlay(); // sheet / edit modal / dialog: back acts as Cancel
@@ -999,6 +1479,11 @@
           if (isNative) return;
           const overlay = $("#overlay");
           const onSync = !$("#syncScreen").classList.contains("hidden");
+          if (selMode && onSync) {
+            exitSelMode();
+            pushSyncHistory();
+            return;
+          }
           if (overlay && overlay.innerHTML.trim() !== "") {
             closeOverlay(); // back while dialog open = Cancel
             if (onSync) pushSyncHistory(); // keep one dummy so back still works
@@ -1088,6 +1573,10 @@
           let saved = JSON.parse(localStorage.getItem(storeKey) || "null");
           if (saved?.audioData && Array.isArray(saved.blocks)) {
             ({ blocks, speed, zoom, audioName, audioData } = saved);
+            meta =
+              saved.meta && typeof saved.meta === "object"
+                ? { ...defaultMeta(), ...saved.meta }
+                : defaultMeta();
             blocks = blocks.map((b) => ({
               id: b.id || ids(),
               text: String(b.text ?? ""),
@@ -1099,12 +1588,27 @@
             $("#speedLabel").textContent = speed.toFixed(2) + "×";
             setScreen(true);
             render();
+            setSongLabel();
             waveInit(audioData);
           }
         } catch (e) {
           console.warn("No usable saved session", e);
         }
         registerBackHandling();
+
+        // Small debug/test hook (also handy in DevTools)
+        window.LyricSync = {
+          parseLrc,
+          buildLrc,
+          player: () => ws,
+          getState: () => ({
+            blocks,
+            clip: clip.slice(),
+            selMode,
+            meta: { ...meta },
+            audioName,
+          }),
+        };
       })();
     </script>
   </body>
