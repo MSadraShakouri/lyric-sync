@@ -8,6 +8,7 @@
     />
     <title>Lyric Sync</title>
     <script src="https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/wavesurfer.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jsmediatags/3.9.5/jsmediatags.min.js"></script>
     <style>
       :root {
         color-scheme: dark;
@@ -299,6 +300,8 @@
         padding: 10px 14px calc(14px + env(safe-area-inset-bottom));
         display: grid;
         gap: 7px;
+        max-height: 70dvh;
+        overflow-y: auto;
       }
       .sheet .handle {
         height: 4px;
@@ -353,18 +356,6 @@
         }
       }
       /* selection action bar */
-      .wave-left {
-        display: flex;
-        gap: 8px;
-        align-items: baseline;
-        min-width: 0;
-      }
-      #songLabel {
-        max-width: 40%;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
       #selbar {
         position: absolute;
         top: 0;
@@ -458,16 +449,14 @@
         <span class="count" id="selCount">0 selected</span
         ><button id="selCopy">Copy</button
         ><button id="selCut">Cut</button
+        ><button id="selCopyBelow">Copy below</button
         ><button id="selPaste" class="hidden">Paste after</button
         ><button id="selDelete" class="danger">Delete</button
         ><button id="selCancel" aria-label="Cancel selection">✕</button>
       </div>
       <div class="wave-area">
         <div class="wave-toolbar">
-          <span class="wave-left"
-            ><span id="songLabel"></span
-            ><span id="nowLabel">00:00.00</span></span
-          ><span>Pinch to zoom</span>
+          <span id="nowLabel">00:00.00</span><span>Pinch to zoom</span>
         </div>
         <div id="waveform"></div>
       </div>
@@ -818,6 +807,7 @@
             <button data-menu="insertbelow">Insert lines below</button>
             ${clip.length ? '<button data-menu="paste">Paste below</button>' : ""}
             <button data-menu="copy">Copy</button>
+            <button data-menu="copybelow">Copy below</button>
             <button data-menu="cut">Cut</button>
             ${hasTime ? '<button data-menu="cleartime">Clear time</button>' : ""}
             <button data-menu="moveup">Move up</button>
@@ -855,9 +845,13 @@
                 toast(
                   "Pasted " + clip.length + (clip.length === 1 ? " line" : " lines"),
                 );
+                clip = []; // consumed; "Paste below" disappears again
               } else if (action === "copy") {
                 clip = [b.text];
                 toast("Copied 1 line");
+              } else if (action === "copybelow") {
+                blocks.splice(i + 1, 0, { id: ids(), text: b.text, timestamp: null });
+                toast("Copied below");
               } else if (action === "cut") {
                 clip = [b.text];
                 blocks.splice(i, 1);
@@ -912,16 +906,16 @@
             let lines = ta.value.split("\n").map((s) => s.trim());
             while (lines.length && lines[0] === "") lines.shift();
             while (lines.length && lines[lines.length - 1] === "") lines.pop();
-            if (lines.length) {
-              blocks.splice(
-                i + 1,
-                0,
-                ...lines.map((t) => ({ id: ids(), text: t, timestamp: null })),
-              );
-              bumpBlocks();
-              save();
-              render();
-            }
+            // Empty input (or only blank lines) -> exactly one blank line
+            if (!lines.length) lines = [""];
+            blocks.splice(
+              i + 1,
+              0,
+              ...lines.map((t) => ({ id: ids(), text: t, timestamp: null })),
+            );
+            bumpBlocks();
+            save();
+            render();
             close();
           };
           $("[data-close]").onclick = close;
@@ -970,6 +964,28 @@
           toast("Cut " + n + (n === 1 ? " line" : " lines"));
           exitSelMode();
         }
+        /* Duplicate the selection right after the last selected line
+           (text only, one step — no clipboard involved) */
+        function doCopyBelow() {
+          const sel = selectedBlocks();
+          if (!sel.length) return;
+          const idxs = blocks
+            .map((b, i) => (selIds.has(b.id) ? i : -1))
+            .filter((i) => i >= 0);
+          const at = Math.max(...idxs) + 1;
+          blocks.splice(
+            at,
+            0,
+            ...sel.map((b) => ({ id: ids(), text: b.text, timestamp: null })),
+          );
+          bumpBlocks();
+          save();
+          render();
+          toast(
+            "Copied " + sel.length + (sel.length === 1 ? " line" : " lines") + " below",
+          );
+          exitSelMode();
+        }
         function doDeleteSel() {
           const n = selIds.size;
           if (!n) return;
@@ -995,6 +1011,7 @@
           bumpBlocks();
           save();
           toast("Pasted " + clip.length + (clip.length === 1 ? " line" : " lines"));
+          clip = []; // consumed; "Paste after" disappears again
           exitSelMode();
         }
         /* ============== Toast + clipboard helpers ============== */
@@ -1030,9 +1047,6 @@
               return false;
             }
           }
-        }
-        function setSongLabel() {
-          $("#songLabel").textContent = audioName || "";
         }
         function editText(id) {
           let b = blocks.find((x) => x.id === id);
@@ -1176,6 +1190,7 @@
         })();
         $("#selCopy").onclick = () => doCopy();
         $("#selCut").onclick = () => doCut();
+        $("#selCopyBelow").onclick = () => doCopyBelow();
         $("#selDelete").onclick = () => doDeleteSel();
         $("#selPaste").onclick = () => pasteAfterSelected();
         $("#selCancel").onclick = () => exitSelMode();
@@ -1324,7 +1339,16 @@
             $("#startNotice").textContent = "Add some lyrics first.";
             return;
           }
-          blocks = parsed.blocks;
+          let newBlocks = parsed.blocks;
+          // New (unstamped) lyrics: pad with a blank line at top and bottom.
+          // Left unstamped, so they stay out of the export unless the user sets them.
+          if (!newBlocks.some((b) => b.timestamp != null)) {
+            const blank = () => ({ id: ids(), text: "", timestamp: null });
+            if (newBlocks[0].text.trim() !== "") newBlocks = [blank(), ...newBlocks];
+            if (newBlocks[newBlocks.length - 1].text.trim() !== "")
+              newBlocks = [...newBlocks, blank()];
+          }
+          blocks = newBlocks;
           meta = parsed.meta;
           bumpBlocks();
           activeId = blocks[0]?.id || null;
@@ -1338,10 +1362,51 @@
             setScreen(true);
             waveInit(audioData);
             render();
-            setSongLabel();
+            extractAudioMeta(f);
           };
           r.readAsDataURL(f);
         };
+        /* Fill any empty metadata fields from the audio file's own tags
+           (ID3v1/v2, MP4, FLAC, OGG...). Tags already present in the LRC
+           text win. Fails silently if the CDN library is unavailable. */
+        function extractAudioMeta(file) {
+          if (typeof jsmediatags === "undefined") return;
+          // Unwraps a tag value: string | { data } | array of those
+          const str = (v) => {
+            if (v == null) return "";
+            if (typeof v === "string") return v.trim();
+            if (Array.isArray(v)) return str(v[0]);
+            if (typeof v === "object") return str(v.data);
+            return String(v).trim();
+          };
+          try {
+            jsmediatags.read(file, {
+              onSuccess: (res) => {
+                const t = (res && res.tags) || {};
+                let filled = false;
+                const fill = (key, val) => {
+                  val = str(val);
+                  if (val && !meta[key]) {
+                    meta[key] = val;
+                    filled = true;
+                  }
+                };
+                fill("ti", t.title);
+                fill("ar", t.artist);
+                fill("al", t.album);
+                // composer is not a jsmediatags shortcut; read the raw frame
+                fill("au", t.TCOM || t["©wrt"]);
+                if (filled) {
+                  save();
+                  toast("Loaded metadata from the audio file");
+                }
+              },
+              onError: () => {},
+            });
+          } catch (e) {
+            console.warn("Metadata extraction failed", e);
+          }
+        }
         // ============== Back-button confirmation (app + web) ==============
         // Capacitor 6 bridge injects a method-only proxy per installed
         // plugin at window.Capacitor.Plugins.<Name> — never destructure
@@ -1588,7 +1653,6 @@
             $("#speedLabel").textContent = speed.toFixed(2) + "×";
             setScreen(true);
             render();
-            setSongLabel();
             waveInit(audioData);
           }
         } catch (e) {
