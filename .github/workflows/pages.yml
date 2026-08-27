@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   pages: write
   id-token: write
 
@@ -37,22 +37,42 @@ jobs:
       - name: Prepare PWA site
         run: node scripts/prepare-www.js
 
-      # One-time self-configuration: this repo's Pages source must be set to
-      # GitHub Actions (branch "gh-pages") for deploy-pages to work. If it
-      # isn't, set it here — no manual Settings click required.
+      # One-time self-configuration: Pages must exist with build type
+      # "workflow" (Settings -> Pages -> Source: "GitHub Actions") for
+      # actions/deploy-pages to work. Note:
+      #   - A Pages site that doesn't exist yet returns 404 on GET and must
+      #     be created with POST (PATCH only works on an existing site).
+      #   - source.branch=gh-pages would be "deploy from branch" mode, NOT
+      #     GitHub Actions mode; the correct field is build_type=workflow.
+      # This step is best-effort: if the GITHUB_TOKEN isn't allowed to
+      # create the site, it warns instead of failing the job — the site can
+      # be enabled once with:
+      #   gh api -X POST repos/<owner>/<repo>/pages -f build_type=workflow
       - name: Ensure Pages source is GitHub Actions
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          current=$(gh api repos/"$GITHUB_REPOSITORY"/pages --jq '.source.branch' 2>/dev/null || true)
-          if [ "$current" != "gh-pages" ]; then
-            echo "Pages source is '${current:-not configured}'; setting it to GitHub Actions."
-            gh api --method PATCH repos/"$GITHUB_REPOSITORY"/pages \
-              -f "source[branch]=gh-pages" -f "source[path]=/"
-            sleep 5
+          build_type=$(gh api "repos/$GITHUB_REPOSITORY/pages" --jq '.build_type' 2>/dev/null || echo "")
+          if [ "$build_type" = "workflow" ]; then
+            echo "Pages already uses the GitHub Actions source."
+          elif [ -n "$build_type" ]; then
+            echo "Pages exists with build type '$build_type'; switching to GitHub Actions."
+            if ! gh api --method PATCH "repos/$GITHUB_REPOSITORY/pages" -f build_type=workflow; then
+              echo "::warning::Could not switch Pages build type. Run once locally: gh api -X PATCH repos/$GITHUB_REPOSITORY/pages -f build_type=workflow"
+            fi
           else
-            echo "Pages source already GitHub Actions."
+            echo "Pages is not enabled; enabling it with the GitHub Actions source."
+            if ! gh api --method POST "repos/$GITHUB_REPOSITORY/pages" -f build_type=workflow; then
+              echo "::warning::Could not enable Pages with GITHUB_TOKEN. Run once locally: gh api -X POST repos/$GITHUB_REPOSITORY/pages -f build_type=workflow"
+            fi
           fi
+          # Wait until the site record is readable before configuring.
+          for _ in $(seq 1 12); do
+            if gh api "repos/$GITHUB_REPOSITORY/pages" --jq '.build_type' >/dev/null 2>&1; then
+              break
+            fi
+            sleep 5
+          done
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
