@@ -1,2 +1,6 @@
+node_modules/
+www/
+dist/
+android/
 *.keystore
 keystore.b64

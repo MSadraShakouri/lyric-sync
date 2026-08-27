@@ -1,10 +1,13 @@
 {
   "name": "lyric-sync",
-  "version": "1.0.0",
-  "description": "Mobile waveform lyric sync tool",
-  "main": "index.js",
+  "version": "1.3.0",
+  "description": "Waveform LRC lyric editor — PWA, single-file build and Android APK from one codebase",
+  "private": true,
   "scripts": {
-    "build": "echo 'Build step'"
+    "prepare:www": "node scripts/prepare-www.js",
+    "build:single": "node scripts/build-single.js",
+    "android:icons": "node scripts/generate-icons.js",
+    "pwa:icons": "node scripts/generate-pwa-icons.js"
   },
   "dependencies": {
     "@capacitor/app": "^6.0.0",

@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#1a1a1a" />
+    <meta
+      name="description"
+      content="Stamp and sync LRC lyrics to your audio, right on your device."
+    />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="icon" href="icons/icon-192.png" />
+    <link rel="apple-touch-icon" href="icons/icon-192.png" />
+    <link rel="stylesheet" href="styles.css" />
+    <title>Lyric Sync</title>
+    <script src="vendor/wavesurfer.min.js"></script>
+    <script src="vendor/jsmediatags.min.js"></script>
+  </head>
+  <body>
+
+    <section id="startScreen" class="screen">
+      <h1>Lyric Sync</h1>
+      <p class="hint">
+        Everything stays on this device. Add audio and lyrics, then stamp each
+        line as it plays. Long-press a line in the editor to select several at
+        once.
+      </p>
+      <label class="field upload"
+        >Audio file
+        <input id="audioInput" type="file" accept="audio/*" /></label>
+      <label class="field"
+        >Lyrics — one block per line
+        <textarea
+          id="lyricsInput"
+          dir="auto"
+          placeholder="Paste lyrics here…&#10;&#10;Empty lines are kept as blank blocks."
+        ></textarea>
+      </label>
+      <label class="field upload"
+        >Lyrics .txt (UTF-8, optional)
+        <input id="textInput" type="file" accept=".txt,.lrc,text/plain" /></label>
+      <div id="startNotice" class="notice"></div>
+      <button id="beginBtn" class="primary">Start syncing</button>
+    </section>
+    <section id="syncScreen" class="screen hidden">
+      <div id="selbar" class="hidden">
+        <span class="count" id="selCount">0 selected</span
+        ><button id="selCopy">Copy</button
+        ><button id="selCut">Cut</button
+        ><button id="selCopyBelow">Copy below</button
+        ><button id="selPaste" class="hidden">Paste after</button
+        ><button id="selDelete" class="danger">Delete</button
+        ><button id="selCancel" aria-label="Cancel selection">✕</button>
+      </div>
+      <div class="wave-area">
+        <div class="wave-toolbar">
+          <span id="nowLabel">00:00.00</span><span>Pinch to zoom</span>
+        </div>
+        <div id="waveform"></div>
+      </div>
+      <main id="lyricsList" class="lyrics" aria-label="Lyric blocks"></main>
+      <footer class="transport">
+        <button id="back2" aria-label="Back 2 seconds">⏪ 2s</button
+        ><button id="playBtn" class="play" aria-label="Play or pause">▶</button
+        ><button id="forward2" aria-label="Forward 2 seconds">2s ⏩</button
+        ><label class="speed"
+          ><span id="speedLabel">1.00×</span
+          ><input
+            id="speedSlider"
+            type="range"
+            min="0.25"
+            max="1.5"
+            step="0.05"
+            value="1" /></label
+        ><button id="exportBtn" class="export">Export .lrc</button>
+      </footer>
+    </section>
+    <div id="overlay"></div>
+    
+      <script src="app.js"></script>
+  </body>
+</html>
