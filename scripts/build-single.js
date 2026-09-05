@@ -15,6 +15,7 @@ const css = fs.readFileSync(path.join(root, "styles.css"), "utf8");
 const js = fs.readFileSync(path.join(root, "app.js"), "utf8");
 const wavesurfer = fs.readFileSync(path.join(root, "vendor", "wavesurfer.min.js"), "utf8");
 const jsmediatags = fs.readFileSync(path.join(root, "vendor", "jsmediatags.min.js"), "utf8");
+const soundtouch = fs.readFileSync(path.join(root, "vendor", "soundtouch.min.js"), "utf8");
 
 const inlineJs = (code) =>
   "<script>\n" + code.replace(/<\/script/gi, "<\\/script") + "\n</script>";
@@ -33,6 +34,10 @@ html = html.replace(
   '<script src="vendor/jsmediatags.min.js"></script>',
   inlineJs(jsmediatags),
 );
+html = html.replace(
+  '<script src="vendor/soundtouch.min.js"></script>',
+  inlineJs(soundtouch),
+);
 html = html.replace('<script src="app.js"></script>', inlineJs(js));
 html = html.replace(
   "<title>Lyric Sync</title>",
@@ -44,6 +49,7 @@ for (const marker of [
   'href="styles.css"',
   'src="vendor/wavesurfer.min.js"',
   'src="vendor/jsmediatags.min.js"',
+  'src="vendor/soundtouch.min.js"',
   'src="app.js"',
   'rel="manifest"',
 ]) {

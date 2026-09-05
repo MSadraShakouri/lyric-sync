@@ -2,7 +2,7 @@
    The CACHE name is bumped automatically from package.json by
    scripts/prepare-www.js (APK build) and the GitHub Pages workflow,
    so every release invalidates the offline cache. */
-const CACHE = "lyric-sync-v1.3.1";
+const CACHE = "lyric-sync-v1.4.0";
 const CORE = [
   "./",
   "./index.html",
@@ -13,6 +13,7 @@ const CORE = [
   "./icons/icon-512.png",
   "./vendor/wavesurfer.min.js",
   "./vendor/jsmediatags.min.js",
+  "./vendor/soundtouch.min.js",
 ];
 self.addEventListener("install", (e) =>
   e.waitUntil(

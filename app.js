@@ -40,24 +40,642 @@
           return `[${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${String(c).padStart(2, "0")}]`;
         };
         const getTime = () => (ws ? Math.round(ws.getCurrentTime() * 1000) : 0);
+        /* ============== SoundTouch Web Audio player ==============
+           Plays through an AudioContext instead of an <audio> element:
+           mobile browsers release the audio device when a media element
+           pauses, causing an audible gap on resume — an AudioContext
+           survives pauses, so resume is seamless. At speed != 1.00x the
+           signal runs through SoundTouch (vendored) for time-stretching
+           with preserved pitch; at exactly 1.00x the connection is
+           direct and bit-perfect. The playback clock is derived from the
+           stretcher's output-frame count, so stamped timestamps stay
+           accurate at any speed. Implements the media-element interface
+           the wavesurfer build expects (passed via the `media` option). */
+        class SoundTouchPlayer {
+          constructor() {
+            this._listeners = {};
+            this.buffer = null;
+            this.currentSrc = "";
+            this._duration = 0;
+            this.paused = true;
+            this._ended = false;
+            this._seeking = false;
+            this._volume = 1;
+            this._muted = false;
+            this._tempo = 1; // content speed (playbackRate)
+            this.playbackPosition = 0; // content pos matching _popped = 0
+            this._anchor = 0; // ctx time of node start (bypass clock)
+            this._srcNode = null;
+            this._proc = null;
+            this._gain = null;
+            this._st = null;
+            this._stretchOn = false;
+            this._fifo = [];
+            this._fifoOff = 0;
+            this._fed = 0; // input frames fed to the stretcher since flush
+            this._popped = 0; // stretcher output frames played since fold
+            this._baseTime = 0;
+            this._draining = false;
+            this._tuTimer = 0;
+            this._stopAtPos = null;
+            this._tmpIn = null;
+            this._tmpOut = null;
+            this._drainBuf = null;
+            this.crossOrigin = null;
+            this.autoplay = false;
+            this.controls = false;
+            this.addEventListener = this.on;
+            this.removeEventListener = this.un;
+            const AC = window.AudioContext || window.webkitAudioContext;
+            this.ctx = AC ? new AC() : null;
+            if (this.ctx) {
+              this._gain = this.ctx.createGain();
+              this._gain.connect(this.ctx.destination);
+              // Mobile: the context may start suspended (autoplay policy);
+              // any tap can wake it.
+              const wake = () => {
+                if (this.ctx && this.ctx.state === "suspended")
+                  this.ctx.resume().catch(() => {});
+              };
+              document.addEventListener("pointerdown", wake);
+              document.addEventListener("touchstart", wake);
+            }
+          }
+          /* --- tiny event emitter (media-element compatible) --- */
+          on(name, cb, opts) {
+            const set =
+              this._listeners[name] || (this._listeners[name] = new Set());
+            const fn =
+              opts && opts.once
+                ? (...a) => {
+                    set.delete(fn);
+                    cb(...a);
+                  }
+                : cb;
+            set.add(fn);
+            return () => set.delete(fn);
+          }
+          un(name, cb) {
+            this._listeners[name] && this._listeners[name].delete(cb);
+          }
+          emit(name, ...args) {
+            const set = this._listeners[name];
+            if (set)
+              set.forEach((f) => {
+                try {
+                  f(...args);
+                } catch (e) {}
+              });
+          }
+          /* --- source loading --- */
+          get src() {
+            return this.currentSrc;
+          }
+          set src(url) {
+            this.currentSrc = url || "";
+            this._duration = 0;
+            if (!url) {
+              this.buffer = null;
+              this.emit("emptied");
+              return;
+            }
+            fetch(url)
+              .then((r) => {
+                if (!r.ok)
+                  throw new Error("Failed to fetch " + url + ": " + r.status);
+                return r.arrayBuffer();
+              })
+              .then((ab) =>
+                this.currentSrc !== url ? null : this.ctx.decodeAudioData(ab),
+              )
+              .then((buf) => {
+                if (this.currentSrc !== url || !buf) return;
+                this.buffer = buf;
+                this._duration = buf.duration;
+                if (this._st)
+                  this._st.stretch.setParameters(this.ctx.sampleRate, 0, 0, 0);
+                this.emit("loadedmetadata");
+                this.emit("durationchange");
+                this.emit("canplay");
+                if (this.autoplay) this.play();
+              })
+              .catch((err) => {
+                console.error("SoundTouchPlayer load error:", err);
+                this.emit("error", err);
+              });
+          }
+          load() {}
+          remove() {
+            this.destroy();
+          }
+          removeAttribute(name) {
+            if (name === "src") this.src = "";
+            else if (name === "playbackRate") this.playbackRate = 1;
+            else if (name === "currentTime") this.currentTime = 0;
+          }
+          canPlayType() {
+            return "";
+          }
+          setSinkId() {
+            return Promise.resolve();
+          }
+          /* --- properties --- */
+          get duration() {
+            return this._duration;
+          }
+          set duration(d) {
+            this._duration = d;
+          }
+          get ended() {
+            return this._ended;
+          }
+          get seeking() {
+            return this._seeking;
+          }
+          get volume() {
+            return this._volume;
+          }
+          set volume(v) {
+            this._volume = v;
+            this._applyGain();
+            this.emit("volumechange");
+          }
+          get muted() {
+            return this._muted;
+          }
+          set muted(m) {
+            this._muted = !!m;
+            this._applyGain();
+            this.emit("volumechange");
+          }
+          _applyGain() {
+            if (this._gain) this._gain.gain.value = this._muted ? 0 : this._volume;
+          }
+          set preservesPitch(v) {} // time-stretching always preserves pitch
+          get playbackRate() {
+            return this._tempo;
+          }
+          set playbackRate(r) {
+            r = +r;
+            if (!(r > 0) || r === this._tempo) return;
+            const old = this._tempo;
+            if (!this.paused && old !== 1 && r !== 1) {
+              // Smooth live tempo change between stretched speeds — the
+              // stretcher handles it without a restart (no audio gap).
+              this._fold(old);
+              this._tempo = r;
+              if (this._st) this._st.tempo = r;
+            } else if (!this.paused) {
+              // Topology change (bypass <-> stretcher): restart the source.
+              this._fold(old);
+              this._tempo = r;
+              if (this._st) this._st.tempo = r;
+              this._flushStretch();
+              this._stopNode();
+              this._startNode();
+            } else {
+              this._tempo = r;
+              if (this._st) this._st.tempo = r;
+              if (old === 1 !== (r === 1)) this._flushStretch();
+            }
+            this.emit("ratechange");
+          }
+          /* --- clock ---
+             While stretched, the audible content position is derived from
+             how many stretcher output frames have actually played
+             (_popped), so the reported time matches what is heard even
+             though the stretcher buffers ~100 ms internally. */
+          _sr() {
+            return this.ctx ? this.ctx.sampleRate : 44100;
+          }
+          _rawNow(tempo) {
+            if (this.paused) return this.playbackPosition;
+            if (this._stretchOn && this._proc) {
+              return (
+                this.playbackPosition +
+                (this._popped * tempo) / this._sr() +
+                (this.ctx.currentTime - this._baseTime) * tempo
+              );
+            }
+            return this.playbackPosition + (this.ctx.currentTime - this._anchor);
+          }
+          get currentTime() {
+            const t = this._rawNow(this._tempo);
+            return Math.max(0, this._duration ? Math.min(t, this._duration) : t);
+          }
+          set currentTime(v) {
+            const wasPlaying = !this.paused;
+            if (wasPlaying) this._stopNode();
+            this.playbackPosition = Math.max(
+              0,
+              this._duration ? Math.min(v, this._duration) : v,
+            );
+            this._popped = 0;
+            this._ended = false;
+            this._flushStretch();
+            this._seeking = true;
+            this.emit("seeking");
+            this._seeking = false;
+            this.emit("seeked");
+            this.emit("timeupdate");
+            if (wasPlaying) this._startNode();
+          }
+          _fold(oldTempo) {
+            // Re-anchor playbackPosition at the current audible position.
+            this.playbackPosition = this._rawNow(oldTempo);
+            this._fed = Math.max(0, this._fed - this._popped * oldTempo);
+            this._popped = 0;
+            this._baseTime = this.ctx ? this.ctx.currentTime : 0;
+          }
+          _flushStretch() {
+            this._fed = 0;
+            this._popped = 0;
+            this._fifo = [];
+            this._fifoOff = 0;
+            this._draining = false;
+            if (this._st) this._st.clear();
+            if (this.ctx) this._baseTime = this.ctx.currentTime;
+          }
+          /* --- transport --- */
+          play() {
+            const self = this;
+            return (async () => {
+              if (!self.ctx) return;
+              if (self.ctx.state !== "running") {
+                try {
+                  await self.ctx.resume();
+                } catch (e) {}
+              }
+              if (!self.paused || !self.buffer) return;
+              self.paused = false;
+              self._ended = false;
+              self._draining = false;
+              self._startNode();
+              self._startTimeupdates();
+              self.emit("play");
+            })();
+          }
+          pause() {
+            if (this.paused) return;
+            this._fold(this._tempo);
+            this._stopNode();
+            this.paused = true;
+            this._stopTimeupdates();
+            this.emit("pause");
+          }
+          stopAt(t) {
+            this._stopAtPos = t;
+          }
+          _stopNode() {
+            if (this._srcNode) {
+              this._srcNode.onended = null;
+              try {
+                this._srcNode.stop();
+              } catch (e) {}
+              try {
+                this._srcNode.disconnect();
+              } catch (e) {}
+              this._srcNode = null;
+            }
+            this._draining = false;
+          }
+          _startNode() {
+            if (!this.ctx || !this.buffer) return;
+            const node = this.ctx.createBufferSource();
+            node.buffer = this.buffer;
+            node.playbackRate.value = 1; // SoundTouch does tempo; 1 = no varispeed
+            this._stretchOn = false;
+            if (this._tempo !== 1) {
+              if (this._ensureProc()) {
+                this._st.tempo = this._tempo;
+                if (this._fed === 0) this._primeStretch();
+                node.connect(this._proc);
+                this._stretchOn = true;
+              } else {
+                node.playbackRate.value = this._tempo; // varispeed fallback
+                node.connect(this._gain);
+              }
+            } else {
+              node.connect(this._gain);
+            }
+            const sr = this._sr();
+            const startPos = Math.max(
+              0,
+              Math.min(
+                this.playbackPosition + this._fed / sr,
+                Math.max(0, this.buffer.duration - 0.005),
+              ),
+            );
+            this._anchor = this.ctx.currentTime;
+            this._baseTime = this._anchor;
+            if (this.buffer.duration - startPos <= 0.01) {
+              this._srcNode = null;
+              this._finish();
+              return;
+            }
+            node.onended = () => {
+              if (this._srcNode !== node) return;
+              this._srcNode = null;
+              if (
+                this._stretchOn &&
+                (this._fifo.length ||
+                  (this._st && this._st.outputBuffer.frameCount > 0))
+              ) {
+                this._draining = true; // let the stretched tail ring out
+              } else {
+                this._finish();
+              }
+            };
+            this._srcNode = node;
+            node.start(this._anchor, startPos);
+          }
+          _finish() {
+            if (this._ended) return;
+            this._draining = false;
+            this.playbackPosition = this._duration;
+            this._popped = 0;
+            this._fed = 0;
+            this.paused = true;
+            this._ended = true;
+            this._stopTimeupdates();
+            this.emit("pause");
+            this.emit("ended");
+            this.emit("timeupdate");
+          }
+          /* --- SoundTouch plumbing --- */
+          _ensureProc() {
+            if (this._proc) return true;
+            const ST = window.SoundTouchJS && window.SoundTouchJS.SoundTouch;
+            if (!ST || !this.ctx) return false;
+            try {
+              this._st = new ST();
+              this._st.stretch.setParameters(this.ctx.sampleRate, 0, 0, 0);
+              this._proc = this.ctx.createScriptProcessor(2048, 2, 2);
+              this._proc.onaudioprocess = (e) => this._process(e);
+              this._proc.connect(this._gain);
+              return true;
+            } catch (e) {
+              console.warn("SoundTouch init failed", e);
+              this._proc = null;
+              this._st = null;
+              return false;
+            }
+          }
+          _primeStretch() {
+            // Pre-fill the stretcher with ~200 ms of content from the feed
+            // frontier so audio is immediate when the source node starts.
+            if (!this._st || !this.buffer) return;
+            const sr = this._sr();
+            const total = this.buffer.length;
+            let off = Math.round(this.playbackPosition * sr) + this._fed;
+            off = Math.max(0, Math.min(off, total));
+            const frames = Math.min(Math.round(0.2 * sr), total - off);
+            if (frames <= 0) return;
+            const chunk = new Float32Array(frames * 2);
+            const L = this.buffer.getChannelData(0);
+            const R = this.buffer.numberOfChannels > 1 ? this.buffer.getChannelData(1) : L;
+            for (let i = 0; i < frames; i++) {
+              chunk[i * 2] = L[off + i];
+              chunk[i * 2 + 1] = R[off + i];
+            }
+            this._st.inputBuffer.putSamples(chunk, 0, frames);
+            this._st.process();
+            this._drainTo();
+            this._fed += frames;
+          }
+          _drainTo() {
+            const ob = this._st.outputBuffer;
+            if (!this._drainBuf) this._drainBuf = new Float32Array(8192);
+            let avail;
+            while ((avail = ob.frameCount) > 0) {
+              const take = Math.min(avail, 4096);
+              ob.receiveSamples(this._drainBuf, take);
+              this._fifo.push(this._drainBuf.slice(0, take * 2));
+            }
+          }
+          _process(e) {
+            const outB = e.outputBuffer;
+            const n = outB.length;
+            const oL = outB.getChannelData(0);
+            const oR = outB.getChannelData(1);
+            if (this.paused) {
+              oL.fill(0);
+              oR.fill(0);
+              return; // paused: silence, keep the fifo for a seamless resume
+            }
+            if (!this._tmpIn || this._tmpIn.length < n * 2) {
+              this._tmpIn = new Float32Array(n * 2);
+              this._tmpOut = new Float32Array(n * 2);
+            }
+            const live = this._srcNode && this._stretchOn;
+            if (live) {
+              const inB = e.inputBuffer;
+              const inL = inB.getChannelData(0);
+              const inR = inB.numberOfChannels > 1 ? inB.getChannelData(1) : inL;
+              const inp = this._tmpIn;
+              for (let i = 0; i < n; i++) {
+                inp[i * 2] = inL[i];
+                inp[i * 2 + 1] = inR[i];
+              }
+              this._st.inputBuffer.putSamples(inp, 0, n);
+              this._st.process();
+              this._drainTo();
+            }
+            const out = this._tmpOut;
+            let need = n;
+            let pos = 0;
+            while (need > 0 && this._fifo.length) {
+              const c = this._fifo[0];
+              const have = c.length / 2 - this._fifoOff;
+              const take = Math.min(need, have);
+              out.set(c.subarray(this._fifoOff * 2, this._fifoOff * 2 + take * 2), pos * 2);
+              this._fifoOff += take;
+              pos += take;
+              need -= take;
+              if (this._fifoOff * 2 >= c.length) {
+                this._fifo.shift();
+                this._fifoOff = 0;
+              }
+            }
+            if (need > 0) out.fill(0, pos * 2);
+            this._popped += n - need;
+            this._baseTime = this.ctx.currentTime;
+            for (let i = 0; i < n; i++) {
+              oL[i] = out[i * 2];
+              oR[i] = out[i * 2 + 1];
+            }
+            if (
+              this._draining &&
+              need === n &&
+              !this._fifo.length &&
+              (!this._st || this._st.outputBuffer.frameCount === 0)
+            ) {
+              this._finish(); // stretched tail fully played out
+            }
+          }
+          _startTimeupdates() {
+            this._stopTimeupdates();
+            this._tuTimer = setInterval(() => {
+              if (this._stopAtPos != null && this.currentTime >= this._stopAtPos) {
+                const t = this._stopAtPos;
+                this._stopAtPos = null;
+                this.pause();
+                this.currentTime = t;
+                return;
+              }
+              this.emit("timeupdate");
+            }, 100);
+          }
+          _stopTimeupdates() {
+            if (this._tuTimer) {
+              clearInterval(this._tuTimer);
+              this._tuTimer = 0;
+            }
+          }
+          destroy() {
+            this._stopTimeupdates();
+            this._stopNode();
+            if (this._proc) {
+              try {
+                this._proc.disconnect();
+              } catch (e) {}
+              this._proc.onaudioprocess = null;
+              this._proc = null;
+            }
+            if (this._gain) {
+              try {
+                this._gain.disconnect();
+              } catch (e) {}
+            }
+            if (this.ctx && this.ctx.state !== "closed") {
+              try {
+                this.ctx.close();
+              } catch (e) {}
+            }
+            this._listeners = {};
+            this.buffer = null;
+          }
+        }
+        /* ============== Session persistence ==============
+           The session record (blocks, speed, zoom, meta) is small and goes
+           to localStorage — debounced, so rapid-fire changes (stamps,
+           slider drags, pinches) never serialize on every event. The audio
+           itself is stored once in IndexedDB; serializing its base64 into
+           every localStorage write used to stall the main thread for
+           hundreds of ms on each stamp/nudge. */
+        const audioStoreKey = "lyric-sync-audio-v1";
+        let saveTimer = 0;
         function save() {
+          if (saveTimer) clearTimeout(saveTimer);
+          saveTimer = setTimeout(saveNow, 350);
+        }
+        function flushSave() {
+          if (!saveTimer) return;
+          clearTimeout(saveTimer);
+          saveTimer = 0;
+          saveNow();
+        }
+        function saveNow() {
+          saveTimer = 0;
           try {
             localStorage.setItem(
               storeKey,
-              JSON.stringify({
-              audioName,
-              audioData,
-              blocks,
-              speed,
-              zoom,
-              meta,
-            }),
+              JSON.stringify({ audioName, blocks, speed, zoom, meta }),
             );
           } catch (e) {
             console.warn(e);
             $("#startNotice").textContent =
-              "Session saved without audio: browser storage is full.";
+              "Session could not be saved: browser storage is full.";
           }
+        }
+        // Don't lose a debounced write when the tab/app goes away.
+        window.addEventListener("pagehide", flushSave);
+        document.addEventListener("visibilitychange", () => {
+          if (document.visibilityState === "hidden") flushSave();
+        });
+        /* Audio bytes live in IndexedDB (async, big quota, no stringify on
+           the main thread). Where IDB is unavailable (file:// single-file
+           build, private mode) fall back to a data URL under its own key,
+           written once per song — not on every save. */
+        function openAudioDb() {
+          return new Promise((resolve, reject) => {
+            try {
+              const req = indexedDB.open("lyric-sync", 1);
+              req.onupgradeneeded = () =>
+                req.result.createObjectStore("files");
+              req.onsuccess = () => resolve(req.result);
+              req.onerror = () => reject(req.error);
+            } catch (e) {
+              reject(e);
+            }
+          });
+        }
+        async function idbPutAudio(rec) {
+          const db = await openAudioDb();
+          await new Promise((resolve, reject) => {
+            const tx = db.transaction("files", "readwrite");
+            tx.objectStore("files").put(rec, "audio");
+            tx.oncomplete = resolve;
+            tx.onerror = () => reject(tx.error);
+            tx.onabort = () => reject(tx.error);
+          });
+          db.close();
+        }
+        async function idbGetAudio() {
+          const db = await openAudioDb();
+          const rec = await new Promise((resolve, reject) => {
+            const tx = db.transaction("files", "readonly");
+            const g = tx.objectStore("files").get("audio");
+            g.onsuccess = () => resolve(g.result || null);
+            g.onerror = () => reject(g.error);
+          });
+          db.close();
+          return rec;
+        }
+        function bufToBase64(buf) {
+          const bytes = new Uint8Array(buf);
+          let bin = "";
+          const chunk = 0x8000;
+          for (let i = 0; i < bytes.length; i += chunk)
+            bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+          return btoa(bin);
+        }
+        async function persistAudio(buf, name, type) {
+          try {
+            await idbPutAudio({ buf, name, type });
+            localStorage.removeItem(audioStoreKey); // drop any stale fallback copy
+            return true;
+          } catch (e) {
+            try {
+              const url =
+                "data:" + (type || "audio/mpeg") + ";base64," + bufToBase64(buf);
+              localStorage.setItem(audioStoreKey, JSON.stringify({ url, name }));
+              return true;
+            } catch (e2) {
+              console.warn("Audio could not be persisted", e2);
+              return false;
+            }
+          }
+        }
+        async function loadPersistedAudio() {
+          try {
+            const rec = await idbGetAudio();
+            if (rec?.buf)
+              return { buf: rec.buf, name: rec.name || "", type: rec.type || "" };
+          } catch (e) {}
+          try {
+            const raw = JSON.parse(localStorage.getItem(audioStoreKey) || "null");
+            if (raw?.url) {
+              const buf = await (await fetch(raw.url)).arrayBuffer();
+              return { buf, name: raw.name || "", type: "" };
+            }
+          } catch (e) {}
+          return null;
+        }
+        function audioBlobUrl(buf, type) {
+          return URL.createObjectURL(
+            new Blob([buf], { type: type || "audio/*" }),
+          );
         }
         function setScreen(sync) {
           $("#startScreen").classList.toggle("hidden", sync);
@@ -169,8 +787,7 @@
           );
         }
         function select(id, seek = false, center = false) {
-          activeId = id;
-          render();
+          highlight(id); // class toggle — no full-list rebuild on a tap
           const b = blocks.find((x) => x.id === id);
           if (seek && b?.timestamp != null) ws.setTime(b.timestamp / 1000);
           if (center) {
@@ -187,9 +804,28 @@
           fn(b);
           bumpBlocks();
           save();
-          render();
+          updateBlockDOM(b); // targeted update — no full-list rebuild
         }
-        function waveInit(data) {
+        /* Update just one block's time/text in the DOM. render() rebuilds
+           every block (hundreds of nodes) and used to run twice per stamp —
+           that was the other half of the freeze. */
+        function updateBlockDOM(b) {
+          const el = document.querySelector(`.block[data-id="${b.id}"]`);
+          if (!el) {
+            render(); // block missing from the DOM — fall back to a full render
+            return;
+          }
+          const t = el.querySelector(".stamp-time");
+          if (t) t.textContent = fmt(b.timestamp);
+          const line = el.querySelector(".line");
+          if (line) {
+            line.innerHTML = escapeHTML(b.text);
+            line.classList.toggle("empty", b.text === "");
+          }
+        }
+        let mediaUrl = null;
+        let stPlayer = null;
+        function waveInit(url) {
           if (typeof WaveSurfer === "undefined") {
             $("#startNotice").textContent =
               "The waveform library could not be loaded. Check your connection and reload the page.";
@@ -197,9 +833,24 @@
             return;
           }
           if (ws) ws.destroy();
+          if (stPlayer) {
+            try {
+              stPlayer.destroy();
+            } catch (e) {}
+            stPlayer = null;
+          }
+          // Free the previous object URL (blob URLs leak otherwise).
+          if (mediaUrl && mediaUrl !== url) {
+            try {
+              URL.revokeObjectURL(mediaUrl);
+            } catch (e) {}
+          }
+          mediaUrl = url;
+          stPlayer = new SoundTouchPlayer();
           ws = WaveSurfer.create({
             container: "#waveform",
-            url: data,
+            media: stPlayer,
+            url,
             height: Math.max(80, innerHeight * 0.3),
             waveColor: "#527985",
             progressColor: "#62d6ff",
@@ -275,7 +926,7 @@
           const t = getTime();
           $("#nowLabel").textContent = fmt(t).slice(1, -1);
 
-          const stamped = blocks.filter((b) => b.timestamp != null);
+          const stamped = getStamped(); // cached — no per-frame allocation
           if (stamped.length) {
             // Closest stamped line (original behavior)
             let closest = stamped[0];
@@ -306,12 +957,15 @@
           raf = requestAnimationFrame(tick);
         }
         function stamp(id) {
-          change(id, (b) => (b.timestamp = getTime()));
-          activeId = id;
-          render();
-          document
-            .querySelector(`.block[data-id="${id}"]`)
-            ?.classList.add("flash");
+          change(id, (b) => (b.timestamp = getTime())); // targeted DOM update inside
+          highlight(id); // move the active class without rebuilding the list
+          const el = document.querySelector(`.block[data-id="${id}"]`);
+          if (el) {
+            // Restart the flash animation even when re-stamping the same line
+            el.classList.remove("flash");
+            void el.offsetWidth;
+            el.classList.add("flash");
+          }
         }
         function showSheet(id) {
           // Pause audio if playing
@@ -618,6 +1272,8 @@
           $("[data-close]").onclick = () => ($("#overlay").innerHTML = "");
         }
         function checkResume() {
+          // Plain play() is fine again: the SoundTouch Web Audio player
+          // resumes seamlessly (the AudioContext survives pauses).
           if (pendingResume && ws && !ws.isPlaying() && $("#overlay").innerHTML === "") {
             ws.play();
             pendingResume = false;
@@ -721,13 +1377,23 @@
           ws && ws.setTime(Math.max(0, ws.getCurrentTime() - 2));
         $("#forward2").onclick = () =>
           ws && ws.setTime(Math.min(ws.getDuration(), ws.getCurrentTime() + 2));
+        /* Waveform re-renders are expensive; coalesce them to at most one
+           per frame while the slider or a pinch is firing rapid events. */
+        let zoomRaf = 0;
+        function scheduleZoom() {
+          if (zoomRaf) return;
+          zoomRaf = requestAnimationFrame(() => {
+            zoomRaf = 0;
+            if (ws) ws.zoom(zoom);
+          });
+        }
         $("#speedSlider").oninput = (e) => {
           speed = +e.target.value;
           $("#speedLabel").textContent = speed.toFixed(2) + "×";
           if (ws) ws.setPlaybackRate(speed);
           zoom = Math.round(80 / speed);
-          if (ws) ws.zoom(zoom);
-          save();
+          scheduleZoom(); // re-render throttled to one per frame
+          save(); // debounced
         };
         $("#exportBtn").onclick = () => showExportDialog();
         /* Builds the LRC file content: metadata header (only filled fields)
@@ -874,18 +1540,32 @@
           bumpBlocks();
           activeId = blocks[0]?.id || null;
           audioName = f.name;
-          let r = new FileReader();
-          r.onload = () => {
-            audioData = r.result;
+          const startWith = (buf) => {
+            audioData = buf;
             speed = 1;
             zoom = 80;
-            save();
+            saveNow(); // land the fresh session immediately
             setScreen(true);
-            waveInit(audioData);
+            // A blob URL streams from memory — unlike a multi-MB data: URL,
+            // which browsers may re-buffer on every resume (pause → play
+            // hiccup).
+            waveInit(audioBlobUrl(buf, f.type));
             render();
             extractAudioMeta(f);
+            persistAudio(buf, f.name, f.type); // async, off the click path
           };
-          r.readAsDataURL(f);
+          if (typeof f.arrayBuffer === "function") {
+            f.arrayBuffer().then(startWith).catch(() => {
+              $("#startNotice").textContent = "Could not read the audio file.";
+            });
+          } else {
+            let r = new FileReader();
+            r.onload = () => startWith(r.result);
+            r.onerror = () => {
+              $("#startNotice").textContent = "Could not read the audio file.";
+            };
+            r.readAsArrayBuffer(f);
+          }
         };
         /* Fill any empty metadata fields from the audio file's own tags
            (ID3v1/v2, MP4, FLAC, OGG...). Tags already present in the LRC
@@ -1016,6 +1696,7 @@
         function returnToMain() {
           ws?.pause();
           saveTimestampsToInput();
+          flushSave(); // persist progress now, don't wait for the debounce
           wasPlaying = false;
           pendingResume = false;
           setScreen(false);
@@ -1047,6 +1728,7 @@
               "Exit",
               true,
               () => {
+                flushSave();
                 const app =
                   window.Capacitor &&
                   window.Capacitor.Plugins &&
@@ -1141,8 +1823,8 @@
                 15,
                 Math.min(500, (pinch.zoom * d) / pinch.distance),
               );
-              ws?.zoom(zoom);
-              save();
+              scheduleZoom(); // throttled waveform re-render
+              save(); // debounced
             },
             { passive: true },
           );
@@ -1155,10 +1837,30 @@
           );
         }
         addPinch();
-        try {
-          let saved = JSON.parse(localStorage.getItem(storeKey) || "null");
-          if (saved?.audioData && Array.isArray(saved.blocks)) {
-            ({ blocks, speed, zoom, audioName, audioData } = saved);
+        (async () => {
+          try {
+            const saved = JSON.parse(localStorage.getItem(storeKey) || "null");
+            if (!saved || !Array.isArray(saved.blocks)) return;
+            // Audio now lives outside the session record. Older versions
+            // kept a base64 data URL inline — migrate it once, then drop it
+            // so the session key stays small.
+            let audio = await loadPersistedAudio();
+            if (!audio && saved.audioData) {
+              try {
+                const buf = await (await fetch(saved.audioData)).arrayBuffer();
+                await persistAudio(buf, saved.audioName || "", "");
+                audio = { buf, name: saved.audioName || "", type: "" };
+              } catch (e) {}
+              delete saved.audioData;
+              try {
+                localStorage.setItem(storeKey, JSON.stringify(saved));
+              } catch (e) {}
+            }
+            if (!audio) return; // nothing to play — stay on the start screen
+            blocks = saved.blocks;
+            speed = Number.isFinite(saved.speed) ? saved.speed : 1;
+            zoom = Number.isFinite(saved.zoom) ? saved.zoom : 80;
+            audioName = saved.audioName || audio.name || "";
             meta =
               saved.meta && typeof saved.meta === "object"
                 ? { ...defaultMeta(), ...saved.meta }
@@ -1170,15 +1872,16 @@
             }));
             activeId = blocks[0]?.id || null;
             bumpBlocks();
+            audioData = audio.buf;
             $("#speedSlider").value = speed;
             $("#speedLabel").textContent = speed.toFixed(2) + "×";
             setScreen(true);
             render();
-            waveInit(audioData);
+            waveInit(audioBlobUrl(audio.buf, audio.type));
+          } catch (e) {
+            console.warn("No usable saved session", e);
           }
-        } catch (e) {
-          console.warn("No usable saved session", e);
-        }
+        })();
         registerBackHandling();
 
         // PWA: register the service worker on the web. Skipped inside the
